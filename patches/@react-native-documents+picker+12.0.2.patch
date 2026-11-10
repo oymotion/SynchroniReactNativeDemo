@@ -1,0 +1,58 @@
+diff --git a/node_modules/@react-native-documents/picker/ios/swift/DocPicker.swift b/node_modules/@react-native-documents/picker/ios/swift/DocPicker.swift
+index a5b5b070c1d62d895f89c19bbf205e2ef7df7dbc..887585132f2fedafdebe04404c35d5724f0641bf 100644
+--- a/node_modules/@react-native-documents/picker/ios/swift/DocPicker.swift
++++ b/node_modules/@react-native-documents/picker/ios/swift/DocPicker.swift
+@@ -5,7 +5,13 @@ import UniformTypeIdentifiers
+ 
+ @objc public class DocPicker: PickerBase {
+   var pickerOptions: PickerOptions?
+-  var openedUrls: Set<URL> = []
++  // openedUrls is touched from the picker's detached metadata task and the
++  // TurboModule method queue (releaseSecureAccess), while the class is
++  // MainActor-isolated by default (Xcode 26 approachable concurrency). Mark
++  // the state nonisolated and serialize every access under the lock —
++  // a plain Set is not thread-safe.
++  nonisolated(unsafe) var openedUrls: Set<URL> = []
++  nonisolated let openedUrlsLock = NSLock()
+ 
+   @MainActor
+   override func createDocumentPicker(from dictionary: NSDictionary) -> UIDocumentPickerViewController {
+@@ -58,10 +64,13 @@ import UniformTypeIdentifiers
+       throw KeepLocalCopyError.sourceAccessError
+     }
+ 
+-    // url.stopAccessingSecurityScopedResource() must be called later by user
+-    DispatchQueue.main.async { [weak self] in
+-      self?.openedUrls.insert(url)
+-    }
++    // url.stopAccessingSecurityScopedResource() must be called later by user.
++    // Insert synchronously (under the lock) so a quick releaseSecureAccess
++    // from JS can never win the race against a deferred main-queue insert and
++    // leave the security scope open forever.
++    openedUrlsLock.lock()
++    openedUrls.insert(url)
++    openedUrlsLock.unlock()
+ 
+     // Use file coordination for reading and writing any of the URL's content.
+     var error: NSError? = nil
+@@ -91,12 +100,18 @@ import UniformTypeIdentifiers
+     return metadataBuilder
+   }
+ 
+-  @objc public func stopAccessingOpenedUrls(_ urlStrings: [String]) {
++  // nonisolated: releaseSecureAccess calls this synchronously on the
++  // TurboModule queue; without it the MainActor default isolation kills the
++  // process in _checkExpectedExecutor.
++  @objc nonisolated public func stopAccessingOpenedUrls(_ urlStrings: [String]) {
+     let incomingUrls = Set(urlStrings.compactMap { URL(string: $0) })
+-    for url in openedUrls.intersection(incomingUrls) {
++    openedUrlsLock.lock()
++    let matched = openedUrls.intersection(incomingUrls)
++    for url in matched {
+       url.stopAccessingSecurityScopedResource()
+       openedUrls.remove(url)
+     }
++    openedUrlsLock.unlock()
+   }
+ 
+ }
