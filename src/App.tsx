@@ -12,6 +12,7 @@ import { SensorController } from '@synchroni/synchroni_sdk_react_native';
 import BioScreen from './screens/BioScreen';
 import DeviceScreen from './screens/DeviceScreen';
 import WaveformScreen from './screens/WaveformScreen';
+import AutomationScreen from './screens/AutomationScreen';
 import { DemoController } from './demo/DemoController';
 
 const TABS = [
@@ -20,6 +21,7 @@ const TABS = [
   // ACC/GYRO/Quat/Euler 2D waveforms), so the tab is labeled accordingly.
   { key: 'waveforms', label: 'IMU' },
   { key: 'bio', label: 'Bio' },
+  { key: 'automation', label: 'Automation' },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -56,6 +58,9 @@ export default function App() {
         </View>
         <View style={tab === 'bio' ? styles.visible : styles.hidden}>
           <BioScreen visible={tab === 'bio'} />
+        </View>
+        <View style={tab === 'automation' ? styles.visible : styles.hidden}>
+          <AutomationScreen visible={tab === 'automation'} />
         </View>
       </View>
       <View style={styles.tabBar}>
