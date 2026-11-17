@@ -14,7 +14,6 @@ import BioScreen from './screens/BioScreen';
 import DeviceScreen from './screens/DeviceScreen';
 import WaveformScreen from './screens/WaveformScreen';
 import AutomationScreen from './screens/AutomationScreen';
-import TestScreen from './screens/TestScreen';
 import { DemoController } from './demo/DemoController';
 
 const TABS = [
@@ -24,7 +23,6 @@ const TABS = [
   { key: 'waveforms', label: 'IMU' },
   { key: 'bio', label: 'Bio' },
   { key: 'automation', label: 'Automation' },
-  { key: 'tests', label: 'Tests' },
 ] as const;
 
 type TabKey = (typeof TABS)[number]['key'];
@@ -71,9 +69,6 @@ export default function App() {
         </View>
         <View style={tab === 'automation' ? styles.visible : styles.hidden}>
           <AutomationScreen visible={tab === 'automation'} />
-        </View>
-        <View style={tab === 'tests' ? styles.visible : styles.hidden}>
-          <TestScreen visible={tab === 'tests'} />
         </View>
       </View>
       <View style={styles.tabBar}>

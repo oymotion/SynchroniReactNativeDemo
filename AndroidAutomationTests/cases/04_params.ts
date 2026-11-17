@@ -132,6 +132,35 @@ export const paramCases: TestCase[] = [
     },
   },
   {
+    id: 'PARAM-FUNC-005',
+    title: 'getParam 采样率回读',
+    chapter: '04_参数',
+    priority: 'P0',
+    mode: 'auto',
+    run: async (ctx) => {
+      const p = await ctx.requireTarget();
+      ctx.assert(!!p, '目标设备未找到');
+      await ctx.prepare(p!);
+      const listKey = await findRateListKey(p!);
+      if (!listKey) {
+        ctx.skip('设备不支持采样率参数');
+      }
+      const list = await p!.getParam(listKey!);
+      const rates = list.split('|').filter((x) => x.length > 0);
+      ctx.assert(rates.length > 0, `采样率列表为空: ${list}`);
+      const rateKey = listKey!.replace('_LIST', '');
+      // 逐档位下发并回读，验证 getParam 始终反映最新下发值。
+      for (const rate of rates) {
+        const set = await safeSetParam(p!, rateKey, rate);
+        ctx.assert(set === 'OK', `setParam(${rateKey},${rate}) 应为 OK: ${set}`);
+        const back = await p!.getParam(rateKey);
+        ctx.assert(back === rate, `回读应一致: ${back} vs ${rate}`);
+      }
+      await p!.disconnect();
+      return `${rateKey} readback ok (${rates.join(',')})`;
+    },
+  },
+  {
     id: 'PARAM-FUNC-006',
     title: 'setParam 滤波开关',
     chapter: '04_参数',

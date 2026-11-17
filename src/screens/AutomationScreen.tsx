@@ -16,6 +16,7 @@ import {
   runVerification,
 } from '../../AndroidAutomationTests/runner';
 import { TestConfig } from '../../AndroidAutomationTests/TestConfig';
+import { DEVICE_RELATED, isDeviceRelated } from '../../AndroidAutomationTests/deviceRelated';
 import type { TestCase, TestResult, Verdict } from '../../AndroidAutomationTests/types';
 
 type ListItem =
@@ -42,6 +43,7 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
   const [active, setActive] = useState<TestCase | null>(null);
   const [reportPath, setReportPath] = useState<string>('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [deviceOnly, setDeviceOnly] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
 
@@ -64,12 +66,31 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
         currentChapter = tc.chapter;
       }
       // 收起的大类跳过其下 case。
-      if (!collapsed[tc.chapter]) {
+      if (!collapsed[tc.chapter] && (!deviceOnly || isDeviceRelated(tc.id))) {
         out.push({ kind: 'case', tc });
       }
     }
     return out;
-  }, [collapsed]);
+  }, [collapsed, deviceOnly]);
+
+  const stats = useMemo(() => {
+    let pass = 0;
+    let fail = 0;
+    let skip = 0;
+    for (const tc of allCases) {
+      const v = results[tc.id]?.verdict;
+      if (v === 'PASS') pass += 1;
+      else if (v === 'FAIL') fail += 1;
+      else if (v === 'SKIP') skip += 1;
+    }
+    return {
+      total: allCases.length,
+      pass,
+      fail,
+      skip,
+      pending: allCases.length - pass - fail - skip,
+    };
+  }, [results]);
 
   const runSingle = async (tc: TestCase) => {
     setBusy(true);
@@ -186,7 +207,10 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
         disabled={busy}
       >
         <View style={styles.rowLeft}>
-          <Text style={styles.rowId}>{tc.id}</Text>
+          <View style={styles.rowIdLine}>
+            <Text style={styles.rowId}>{tc.id}</Text>
+            {isDeviceRelated(tc.id) ? <Text style={styles.deviceTag}>设备</Text> : null}
+          </View>
           <Text style={styles.rowTitle} numberOfLines={1}>
             {tc.title}
           </Text>
@@ -216,9 +240,18 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
         <TouchableOpacity style={styles.btn} onPress={() => void exportReport()}>
           <Text style={styles.btnText}>导出报告</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.btn, deviceOnly && styles.btnActive]}
+          onPress={() => setDeviceOnly((v) => !v)}
+        >
+          <Text style={styles.btnText}>仅设备相关</Text>
+        </TouchableOpacity>
       </View>
       <Text style={styles.hint}>
         目标 identity={TestConfig.TARGET_IDENTITY} | 自动用例可直接跑，半自动/人工点条目看步骤
+      </Text>
+      <Text style={styles.stats}>
+        共 {stats.total} · PASS {stats.pass} · FAIL {stats.fail} · SKIP {stats.skip} · 待测 {stats.pending}
       </Text>
 
       <FlatList
@@ -255,6 +288,9 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
               {active?.id} ({active?.priority}/{MODE_LABEL[active?.mode ?? 'manual']})
             </Text>
             <Text style={styles.modalTitle}>{active?.title}</Text>
+            {active && isDeviceRelated(active.id) ? (
+              <Text style={styles.modalDevice}>设备相关：{DEVICE_RELATED[active.id]}</Text>
+            ) : null}
             <Text style={styles.modalSection}>操作步骤</Text>
             {(active?.steps ?? []).length > 0 ? (
               (active!.steps ?? []).map((s, i) => (
@@ -308,8 +344,10 @@ const styles = StyleSheet.create({
   },
   btnPrimary: { backgroundColor: '#0a84ff' },
   btnDisabled: { opacity: 0.4 },
+  btnActive: { backgroundColor: '#0a84ff', borderColor: '#0a84ff' },
   btnText: { color: '#ffffff', fontSize: 13, fontWeight: '600' },
   hint: { color: '#8e8e93', fontSize: 11, paddingHorizontal: 12, paddingBottom: 6 },
+  stats: { color: '#e5e5ea', fontSize: 12, paddingHorizontal: 12, paddingBottom: 6 },
   list: { flex: 1 },
   header: {
     backgroundColor: '#1c1c1e',
@@ -331,6 +369,17 @@ const styles = StyleSheet.create({
   },
   rowLeft: { flex: 1, marginRight: 8 },
   rowId: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
+  rowIdLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  deviceTag: {
+    color: '#ff9f0a',
+    fontSize: 10,
+    fontWeight: '700',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ff9f0a',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
   rowTitle: { color: '#a1a1a6', fontSize: 12, marginTop: 2 },
   rowRight: { alignItems: 'flex-end' },
   badge: { color: '#8e8e93', fontSize: 10 },
@@ -343,6 +392,7 @@ const styles = StyleSheet.create({
   modalCard: { backgroundColor: '#1c1c1e', margin: 24, borderRadius: 12, padding: 16 },
   modalId: { color: '#0a84ff', fontSize: 13, fontWeight: '700' },
   modalTitle: { color: '#ffffff', fontSize: 16, fontWeight: '700', marginTop: 4 },
+  modalDevice: { color: '#ff9f0a', fontSize: 12, marginTop: 6 },
   modalSection: { color: '#8e8e93', fontSize: 12, marginTop: 12, marginBottom: 4 },
   step: { color: '#d1d1d6', fontSize: 13, lineHeight: 20 },
   modalBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
