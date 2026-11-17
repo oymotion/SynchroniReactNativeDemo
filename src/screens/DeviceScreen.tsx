@@ -221,6 +221,11 @@ export default function DeviceScreen({ visible }: { visible: boolean }) {
           onToggle={controller.setBinDataEnabled}
         />
         <Checkbox
+          label="Enable debug dongle"
+          checked={controller.debugDongleEnabled}
+          onToggle={controller.setDebugDongleEnabled}
+        />
+        <Checkbox
           label="Translate IMU (split ACC/GYRO/EULER/QUAT)"
           checked={controller.translateImu}
           onToggle={controller.setTranslateImu}
