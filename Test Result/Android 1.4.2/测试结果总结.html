@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Synchroni RN SDK 测试结果总结 · Android 1.4.2</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --bg2: #ffffff;
+    --ink: #1a1d24;
+    --muted: #6b7280;
+    --rule: #e6e8ec;
+    --accent: #2563eb;
+    --accent2: #7c3aed;
+    --pass: #16a34a;
+    --fail: #dc2626;
+    --skip: #d97706;
+    --pending: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 24px 64px; }
+
+  /* Hero */
+  .hero {
+    background: linear-gradient(135deg, #1d2b4f 0%, #2b3a6b 55%, #3b2f6b 100%);
+    color: #fff;
+    border-radius: 16px;
+    padding: 40px 36px;
+    margin-bottom: 24px;
+  }
+  .hero .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #b9c4e8;
+    margin: 0 0 12px;
+  }
+  .hero h1 { margin: 0 0 10px; font-size: 28px; font-weight: 700; line-height: 1.25; }
+  .hero p { margin: 0; color: #d5dbef; font-size: 14px; }
+  .hero .meta {
+    margin-top: 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .hero .chip {
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 12.5px;
+    color: #eef1fb;
+  }
+
+  /* Stat cards */
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 24px; }
+  .stat {
+    background: var(--bg2);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 18px 16px;
+  }
+  .stat .num { font-size: 30px; font-weight: 700; line-height: 1.1; }
+  .stat .lbl { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  .stat.total .num { color: var(--ink); }
+  .stat.pass .num { color: var(--pass); }
+  .stat.fail .num { color: var(--fail); }
+  .stat.skip .num { color: var(--skip); }
+  .stat.pending .num { color: var(--pending); }
+  .stat.rate .num { color: var(--accent); }
+
+  /* Cards */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--rule);
+    border-radius: 14px;
+    padding: 24px 26px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .card .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+
+  /* Donut + legend */
+  .charts { display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: center; }
+  .donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .donut {
+    width: 200px; height: 200px; border-radius: 50%;
+    background: conic-gradient(
+      var(--pass) 0% 93.04%,
+      var(--fail) 93.04% 98.73%,
+      var(--skip) 98.73% 100%,
+      var(--pending) 100% 100%
+    );
+    position: relative;
+  }
+  .donut::after {
+    content: "";
+    position: absolute; inset: 26px;
+    background: var(--bg2); border-radius: 50%;
+  }
+  .donut .center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 1;
+  }
+  .donut .center .pct { font-size: 30px; font-weight: 700; color: var(--pass); }
+  .donut .center .cap { font-size: 12px; color: var(--muted); }
+  .legend { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 240px; }
+  .legend .row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .legend .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .legend .row b { margin-left: auto; font-weight: 600; }
+
+  /* Chapter bars */
+  .chap-row { margin-bottom: 14px; }
+  .chap-row .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .chap-row .head .name { font-weight: 600; font-size: 13.5px; }
+  .chap-row .head .rate { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; background: var(--rule); border-radius: 999px; overflow: hidden; display: flex; }
+  .bar .seg { height: 100%; }
+  .bar .seg.pass { background: var(--pass); }
+  .bar .seg.fail { background: var(--fail); }
+  .bar .seg.skip { background: var(--skip); }
+  .bar .seg.pending { background: var(--pending); }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.02em; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tfoot td { border-top: 2px solid var(--ink); font-weight: 700; }
+
+  .badge {
+    display: inline-block; border-radius: 999px; padding: 2px 9px;
+    font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  }
+  .badge.pass { background: #e8f6ee; color: var(--pass); }
+  .badge.fail { background: #fdeaea; color: var(--fail); }
+  .badge.skip { background: #fdf3e2; color: var(--skip); }
+  .badge.pending { background: #eef0f3; color: var(--pending); }
+
+  .cid { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 12.5px; font-weight: 600; }
+
+  /* Defect blocks */
+  .defect { border: 1px solid var(--rule); border-left: 4px solid var(--fail); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+  .defect .dhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .defect .dhead .id { font-family: Consolas, Menlo, monospace; font-weight: 700; color: var(--fail); font-size: 14px; }
+  .defect .dhead .cnt { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .defect ul { margin: 0; padding-left: 18px; }
+  .defect li { margin-bottom: 6px; }
+
+  .note { font-size: 13px; color: var(--muted); }
+  footer { margin-top: 8px; color: var(--muted); font-size: 12.5px; text-align: center; }
+
+  @media (max-width: 860px) {
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .charts { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">Test Report · React Native SDK</p>
+    <h1>Synchroni RN SDK 自动化测试结果总结</h1>
+    <p>对 <strong>@synchroni/synchroni_sdk_react_native@1.4.2</strong> 全部对外接口的用例执行汇总，覆盖正向 / 边界 / 异常 / 系统级异常场景。</p>
+    <div class="meta">
+      <span class="chip">SDK 1.4.2</span>
+      <span class="chip">React Native 0.86.2</span>
+      <span class="chip">React 19.2.3</span>
+      <span class="chip">Android 真机</span>
+      <span class="chip">10 章 · 158 用例</span>
+    </div>
+  </header>
+
+  <section class="stats">
+    <div class="stat total"><div class="num">158</div><div class="lbl">总用例</div></div>
+    <div class="stat pass"><div class="num">147</div><div class="lbl">通过 PASS</div></div>
+    <div class="stat fail"><div class="num">9</div><div class="lbl">失败 FAIL</div></div>
+    <div class="stat skip"><div class="num">2</div><div class="lbl">跳过 SKIP</div></div>
+    <div class="stat pending"><div class="num">0</div><div class="lbl">待测试 PENDING</div></div>
+    <div class="stat rate"><div class="num">93.0%</div><div class="lbl">通过率</div></div>
+  </section>
+
+  <section class="card">
+    <h2>结果分布</h2>
+    <p class="sub">按判定结果四态统计（通过 / 失败 / 跳过 / 待测试）。</p>
+    <div class="charts">
+      <div class="donut-wrap">
+        <div class="donut">
+          <div class="center">
+            <div class="pct">93.0%</div>
+            <div class="cap">通过率</div>
+          </div>
+        </div>
+        <div class="legend">
+          <div class="row"><span class="dot" style="background:var(--pass)"></span>通过 PASS <b>147</b></div>
+          <div class="row"><span class="dot" style="background:var(--fail)"></span>失败 FAIL <b>9</b></div>
+          <div class="row"><span class="dot" style="background:var(--skip)"></span>跳过 SKIP <b>2</b></div>
+          <div class="row"><span class="dot" style="background:var(--pending)"></span>待测试 PENDING <b>0</b></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="chap-row">
+          <div class="head"><span class="name">01 控制器与扫描</span><span class="rate">29/29 · 100%</span></div>
+          <div class="bar"><div class="seg pass" style="width:100%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">02 连接与状态机</span><span class="rate">15/18 · 83.3%</span></div>
+          <div class="bar"><div class="seg pass" style="width:83.33%"></div><div class="seg fail" style="width:16.67%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">03 数据流</span><span class="rate">26/26 · 100%</span></div>
+          <div class="bar"><div class="seg pass" style="width:100%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">04 参数</span><span class="rate">16/18 · 88.9%</span></div>
+          <div class="bar"><div class="seg pass" style="width:88.89%"></div><div class="seg skip" style="width:11.11%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">05 多设备同步</span><span class="rate">7/7 · 100%</span></div>
+          <div class="bar"><div class="seg pass" style="width:100%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">06 Bin 录制回放解析</span><span class="rate">14/14 · 100%</span></div>
+          <div class="bar"><div class="seg pass" style="width:100%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">07 电量日志调试</span><span class="rate">11/11 · 100%</span></div>
+          <div class="bar"><div class="seg pass" style="width:100%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">08 系统异常</span><span class="rate">11/14 · 78.6%</span></div>
+          <div class="bar"><div class="seg pass" style="width:78.57%"></div><div class="seg fail" style="width:21.43%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">09 异步接口</span><span class="rate">5/8 · 62.5%</span></div>
+          <div class="bar"><div class="seg pass" style="width:62.5%"></div><div class="seg fail" style="width:37.5%"></div></div>
+        </div>
+        <div class="chap-row">
+          <div class="head"><span class="name">10 底层接口与边界补充</span><span class="rate">13/13 · 100%</span></div>
+          <div class="bar"><div class="seg pass" style="width:100%"></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>章节明细</h2>
+    <p class="sub">各章用例数量与判定结果分布。</p>
+    <table>
+      <thead>
+        <tr>
+          <th>章节</th>
+          <th>覆盖接口</th>
+          <th class="num">通过</th>
+          <th class="num">失败</th>
+          <th class="num">跳过</th>
+          <th class="num">待测试</th>
+          <th class="num">合计</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>01 控制器与扫描</td><td>SensorController（单例 / 扫描 / 句柄 / 版本 / 后端 / terminate）</td><td class="num">29</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">29</td><td><span class="badge pass">全通过</span></td></tr>
+        <tr><td>02 连接与状态机</td><td>SensorProfile（connect / disconnect / 状态机 / autoReconnect）</td><td class="num">15</td><td class="num">3</td><td class="num">0</td><td class="num">0</td><td class="num">18</td><td><span class="badge fail">3 失败</span></td></tr>
+        <tr><td>03 数据流</td><td>init / 起停流 / SensorData 访问器</td><td class="num">26</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">26</td><td><span class="badge pass">全通过</span></td></tr>
+        <tr><td>04 参数</td><td>profile / controller 的 setParam / getParam</td><td class="num">16</td><td class="num">0</td><td class="num">2</td><td class="num">0</td><td class="num">18</td><td><span class="badge skip">2 跳过</span></td></tr>
+        <tr><td>05 多设备同步</td><td>multiStart / multiStop / multiReplay</td><td class="num">7</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">7</td><td><span class="badge pass">全通过</span></td></tr>
+        <tr><td>06 Bin 录制回放解析</td><td>getBinFileInfo / replay / pause / resume / stop / CSV</td><td class="num">14</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">14</td><td><span class="badge pass">全通过</span></td></tr>
+        <tr><td>07 电量日志调试</td><td>getBatteryLevel / onPowerChanged / log / 日志开关</td><td class="num">11</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">11</td><td><span class="badge pass">全通过</span></td></tr>
+        <tr><td>08 系统异常</td><td>蓝牙 / WiFi / 飞行模式 / 前后台 / 锁屏 / 旋转 / 分屏 / 权限</td><td class="num">11</td><td class="num">3</td><td class="num">0</td><td class="num">0</td><td class="num">14</td><td><span class="badge fail">3 失败</span></td></tr>
+        <tr><td>09 异步接口</td><td>异步语义 / 并发合并 / worklet / 重连 answer</td><td class="num">5</td><td class="num">3</td><td class="num">0</td><td class="num">0</td><td class="num">8</td><td><span class="badge fail">3 失败</span></td></tr>
+        <tr><td>10 底层接口与边界补充</td><td>DeviceInfo / 枚举 / terminateSdk / onSuspend / SensorData 边界</td><td class="num">13</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">13</td><td><span class="badge pass">全通过</span></td></tr>
+      </tbody>
+      <tfoot>
+        <tr><td>合计</td><td></td><td class="num">147</td><td class="num">9</td><td class="num">2</td><td class="num">0</td><td class="num">158</td><td></td></tr>
+      </tfoot>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>失败用例明细（9）</h2>
+    <p class="sub">失败项按缺陷归因分组，集中在 <strong>自动重连回调</strong> 与 <strong>系统级蓝牙/飞行模式异常</strong> 两条链路。</p>
+
+    <div class="defect">
+      <div class="dhead"><span class="id">问题 7727</span><span class="cnt">3 例 · 系统级蓝牙 / 飞行模式异常</span></div>
+      <ul>
+        <li><span class="cid">SYS-ROB-002</span> 起流中关闭蓝牙 — 预期数据停止并收到链路丢失推送，实际未达预期。</li>
+        <li><span class="cid">SYS-ROB-003</span> 蓝牙重开后自动恢复 — 预期 autoReconnect=true 时回到 Ready 并恢复数据。</li>
+        <li><span class="cid">SYS-ROB-004</span> 飞行模式开关 — 预期走 SYS-ROB-002/003 路径并恢复。</li>
+      </ul>
+    </div>
+
+    <div class="defect">
+      <div class="dhead"><span class="id">问题 7738</span><span class="cnt">5 例 · onAutoReconnect 回调未触发 / answer 一次性语义</span></div>
+      <ul>
+        <li><span class="cid">DEV-SM-013</span> onAutoReconnect 回调 + answer(true) 接管 — 未触发回调。</li>
+        <li><span class="cid">DEV-SM-014</span> onAutoReconnect 回调 + answer(false) 默认恢复 — 未触发回调。</li>
+        <li><span class="cid">DEV-SM-015</span> onAutoReconnect 不 answer 10s 超时默认恢复 — 未触发回调。</li>
+        <li><span class="cid">ASYNC-FUNC-003</span> autoReconnect answer 异步一次性 — 预期首次 answer 生效、后续忽略。</li>
+        <li><span class="cid">ASYNC-ROB-002</span> onAutoReconnect 多次 answer 只生效一次 — 预期仅第一次生效。</li>
+      </ul>
+    </div>
+
+    <div class="defect">
+      <div class="dhead"><span class="id">问题 7741</span><span class="cnt">1 例 · worklet 非法参数降级</span></div>
+      <ul>
+        <li><span class="cid">ASYNC-ROB-003</span> useWorkletRuntime 非法参数返回 false — 预期返回 false，实测返回 true（非法参数未被拒绝）。</li>
+      </ul>
+    </div>
+
+  </section>
+
+  <section class="card">
+    <h2>待测试用例（0）</h2>
+    <p class="sub">全部用例已执行完毕，无待测项。</p>
+  </section>
+
+  <section class="card">
+    <h2>跳过用例（2）</h2>
+    <p class="sub">设备能力不支持，按「不支持，跳过」处理，不计入失败。</p>
+    <table>
+      <thead>
+        <tr><th>用例 ID</th><th>标题</th><th>跳过原因</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="cid">PARAM-FUNC-010</td><td>角度流 NTF_ANGLE 独立开关</td><td>目标设备无角度流能力</td></tr>
+        <tr><td class="cid">PARAM-FUNC-011</td><td>磁力计无独立开关（随 NTF_IMU 聚合）</td><td>目标设备无 IMU/磁力计能力</td></tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:14px">说明：跳过项遵循「能力不硬编码」原则，由 DeviceInfo 运行时判定，<strong>设备不支持≠SDK 缺陷</strong>。</p>
+  </section>
+
+  <footer>
+    <p>数据来源：<span class="cid">rn/demo/Test Result/Android 1.4.2/</span> · 生成于 2026-11-17 · Synchroni React Native SDK 1.4.2 测试结果自动汇总</p>
+  </footer>
+
+</div>
+</body>
+</html>
