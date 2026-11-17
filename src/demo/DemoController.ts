@@ -368,6 +368,24 @@ export class DemoController {
   private replayStopRequestedMacs = new Set<string>();
 
   private listeners = new Set<Listener>();
+
+  // Test-harness observers. The SDK exposes single-slot callbacks that the
+  // demo owns; these sets let the automation screen observe the same events
+  // without stealing those slots.
+  public testDataListeners = new Set<(dataList: SensorData[]) => void>();
+  public testStateListeners = new Set<
+    (sensor: SensorProfile, state: DeviceStateEx) => void
+  >();
+  public testTransferListeners = new Set<
+    (sensor: SensorProfile, transferring: boolean) => void
+  >();
+  public testPowerListeners = new Set<
+    (sensor: SensorProfile, power: number) => void
+  >();
+  public testErrorListeners = new Set<
+    (sensor: SensorProfile, reason: string) => void
+  >();
+
   // Per-device DEBUG_LOG_PATH read-back cache, re-sent on later sessions.
   private lastLogPaths = new Map<string, string>();
   // Same read-back cache for DEBUG_BLE_DATA_PATH.
@@ -390,8 +408,7 @@ export class DemoController {
       this.filterStates[key] = false;
     }
     this.resetSampleRateStates();
-    SensorController.Instance.onScanResult = this.onScanResult;
-    SensorController.Instance.onEnableChanged = this.onEnableChanged;
+    this.bindControllerCallbacks();
     this.sdkVersionPromise = SensorController.Instance.getVersion()
       .then((v) => {
         this.sdkVersion = v;
@@ -437,6 +454,24 @@ export class DemoController {
     }
   }
 
+  /** Assign the demo's controller-level callbacks on the current SDK
+   * singleton. Re-run after a test-harness terminate()/terminateSdk()
+   * replaces the singleton. */
+  private bindControllerCallbacks(): void {
+    SensorController.Instance.onScanResult = this.onScanResult;
+    SensorController.Instance.onEnableChanged = this.onEnableChanged;
+  }
+
+  /** Reset runtime state after a test-harness terminate()/terminateSdk()
+   * replaced the SDK singleton. Stale per-device states reference profiles
+   * on the dead singleton, so they must be dropped before the next connect
+   * re-creates fresh profiles. */
+  public resetAfterTerminate(): void {
+    this.deviceStates.clear();
+    this.selectedMac = undefined;
+    this.bindControllerCallbacks();
+  }
+
   /** Remove timers/listeners. Native teardown (terminate) is intentionally left out. */
   public release(): void {
     if (this.plotTimer) {
@@ -469,6 +504,51 @@ export class DemoController {
 
   public notify(): void {
     this.listeners.forEach((l) => l());
+  }
+
+  public addTestDataListener(
+    listener: (dataList: SensorData[]) => void
+  ): () => void {
+    this.testDataListeners.add(listener);
+    return () => {
+      this.testDataListeners.delete(listener);
+    };
+  }
+
+  public addTestStateListener(
+    listener: (sensor: SensorProfile, state: DeviceStateEx) => void
+  ): () => void {
+    this.testStateListeners.add(listener);
+    return () => {
+      this.testStateListeners.delete(listener);
+    };
+  }
+
+  public addTestTransferListener(
+    listener: (sensor: SensorProfile, transferring: boolean) => void
+  ): () => void {
+    this.testTransferListeners.add(listener);
+    return () => {
+      this.testTransferListeners.delete(listener);
+    };
+  }
+
+  public addTestPowerListener(
+    listener: (sensor: SensorProfile, power: number) => void
+  ): () => void {
+    this.testPowerListeners.add(listener);
+    return () => {
+      this.testPowerListeners.delete(listener);
+    };
+  }
+
+  public addTestErrorListener(
+    listener: (sensor: SensorProfile, reason: string) => void
+  ): () => void {
+    this.testErrorListeners.add(listener);
+    return () => {
+      this.testErrorListeners.delete(listener);
+    };
   }
 
   // ---------- worklets DSP path ----------
@@ -903,18 +983,39 @@ export class DemoController {
     profile.onErrorCallback = (_sensor: SensorProfile, reason: string) => {
       this.appLog(`App: error callback: ${String(reason)}`, 'E', st);
       this.status = `Error: ${String(reason)}`;
+      for (const listener of this.testErrorListeners) {
+        try {
+          listener(_sensor, String(reason));
+        } catch {
+          // test listeners must never break the data path
+        }
+      }
       this.notify();
     };
     profile.onSensorNotifyData = (
       _sensor: SensorProfile,
       dataList: SensorData[]
     ) => {
+      for (const listener of this.testDataListeners) {
+        try {
+          listener(dataList);
+        } catch {
+          // test listeners must never break the data path
+        }
+      }
       for (const data of dataList) {
         this.onData(st, data);
       }
     };
     profile.onPowerChanged = (_sensor: SensorProfile, power: number) => {
       st.power = power;
+      for (const listener of this.testPowerListeners) {
+        try {
+          listener(_sensor, power);
+        } catch {
+          // test listeners must never break the data path
+        }
+      }
       this.notify();
     };
     profile.onDeviceInfoUpdate = (_sensor: SensorProfile, info: DeviceInfo) => {
@@ -970,6 +1071,13 @@ export class DemoController {
     ) => {
       const mac = st.profile.BLEDevice.Address;
       st.streaming = isTransferring;
+      for (const listener of this.testTransferListeners) {
+        try {
+          listener(_sensor, isTransferring);
+        } catch {
+          // test listeners must never break the data path
+        }
+      }
       this.appLog(
         `App: data stream ${isTransferring ? 'ON' : 'OFF'} ${mac}`,
         'I',
@@ -1012,6 +1120,13 @@ export class DemoController {
 
   private onStateChange(st: DeviceState, newstate: DeviceStateEx): void {
     const mac = st.profile.BLEDevice.Address;
+    for (const listener of this.testStateListeners) {
+      try {
+        listener(st.profile, newstate);
+      } catch {
+        // test listeners must never break the state machine
+      }
+    }
     if (newstate === DeviceStateEx.Ready) {
       if (st.isReplay) {
         st.flowStarted = true;
