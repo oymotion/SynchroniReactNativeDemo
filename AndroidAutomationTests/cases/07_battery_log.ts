@@ -15,6 +15,7 @@ export const batteryLogCases: TestCase[] = [
       const lvl = await p!.getBatteryLevel();
       ctx.assert(typeof lvl === 'number', 'getBatteryLevel 应返回 number');
       ctx.assert(lvl >= 0, `电量应 >=0，实际 ${lvl}`);
+      await p!.disconnect();
       return `battery=${lvl}`;
     },
   },
@@ -49,6 +50,7 @@ export const batteryLogCases: TestCase[] = [
       const lvl2 = await p!.getBatteryLevel();
       ctx.assert(lvl1 >= 0 && lvl2 >= 0, '电量读取失败');
       ctx.assert(lvl2 === lvl1, `第二次读取应命中缓存: ${lvl1} vs ${lvl2}`);
+      await p!.disconnect();
       return `cached=${lvl1}`;
     },
   },
@@ -57,24 +59,38 @@ export const batteryLogCases: TestCase[] = [
     title: 'onPowerChanged 收到电量推送',
     chapter: '07_电量日志调试',
     priority: 'P0',
-    mode: 'semi-auto',
-    steps: ['保持设备连接，等待电量推送（或触发刷新）。'],
+    mode: 'auto',
     run: async (ctx) => {
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       await ctx.prepare(p!);
+      const started = await p!.startDataNotification();
+      ctx.assert(started, 'startDataNotification() returned false');
       let received: number | undefined;
       p!.onPowerChanged = (_s, power) => {
         received = power;
       };
-      await p!.getBatteryLevel();
-      await ctx.sleep(3000);
-      p!.onPowerChanged = () => {};
-      // 电量推送非强制必达，仅在收到时校验，未收到不判 FAIL。
-      if (received !== undefined) {
-        ctx.assert(received >= 0, `电量推送应 >=0，实际 ${received}`);
+      try {
+        // 起流后等最多 15 分钟，收到电量推送即结束。
+        const deadline = Date.now() + 15 * 60 * 1000;
+        while (received === undefined && Date.now() < deadline) {
+          await ctx.sleep(1000);
+        }
+      } finally {
+        p!.onPowerChanged = () => {};
+        try {
+          await p!.stopDataNotification();
+        } catch {
+          // ignore
+        }
+        await p!.disconnect();
       }
-      return received !== undefined ? `power=${received}` : 'no push within window (recorded)';
+      if (received === undefined) {
+        ctx.skip('15 分钟内未收到电量变化');
+        return '';
+      }
+      ctx.assert(received >= 0, `电量推送应 >=0，实际 ${received}`);
+      return `power=${received}`;
     },
   },
   {

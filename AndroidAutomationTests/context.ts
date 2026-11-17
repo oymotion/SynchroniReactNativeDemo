@@ -65,6 +65,41 @@ export function createContext(log: (msg: string) => void): TestContext {
       return profile;
     },
 
+    async scanKnownDevices(timeoutMs = TestConfig.SCAN_TIMEOUT_MS) {
+      const devices: BLEDevice[] = await SensorController.Instance.scanOnce(timeoutMs);
+      return devices.filter((d) => TestConfig.matchesKnownDevice(d));
+    },
+
+    async requireKnownDevices() {
+      const devices = await ctx.scanKnownDevices();
+      const profiles: SensorProfile[] = [];
+      for (const d of devices) {
+        const p = SensorController.Instance.requireSensor(d);
+        if (!p) {
+          ctx.log(`[multi] requireSensor failed for ${d.Address}`);
+          continue;
+        }
+        try {
+          if (!p.isReady) {
+            const ok = await p.connect();
+            if (!ok) {
+              ctx.log(`[multi] connect failed for ${d.Address}`);
+              continue;
+            }
+            await ctx.waitFor(() => p.isReady, TestConfig.READY_TIMEOUT_MS, `device ${d.Address} Ready`);
+          }
+          if (!p.hasInited) {
+            const ok = await p.init(TestConfig.INIT_PACKAGE_SAMPLE_COUNT, TestConfig.INIT_POWER_REFRESH_MS);
+            ctx.log(`[multi] init ${d.Address} -> ${ok}`);
+          }
+          profiles.push(p);
+        } catch (e) {
+          ctx.log(`[multi] prepare ${d.Address} failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      return profiles;
+    },
+
     async prepare(profile) {
       if (!profile.isReady) {
         const ok = await profile.connect();
@@ -112,11 +147,27 @@ export function createContext(log: (msg: string) => void): TestContext {
     },
 
     async fetchDeviceInfo(profile) {
-      const info = await profile.fetchDeviceInfo();
-      if (info === undefined) {
-        ctx.log('[deviceInfo] fetchDeviceInfo returned undefined');
+      let nativeError = '';
+      // 临时挂 error 回调，把 fetchDeviceInfo 内部吞掉的 native 错误抓出来，便于区分
+      // 「设备不支持/未应答 DeviceInfo 读取」还是「SDK 真 bug」。
+      profile.onErrorCallback = (_s, reason) => {
+        const r = reason as unknown;
+        nativeError =
+          r && typeof r === 'object' && typeof (r as { message?: unknown }).message === 'string'
+            ? (r as { message: string }).message
+            : String(reason);
+      };
+      try {
+        const info = await profile.fetchDeviceInfo();
+        if (info === undefined) {
+          ctx.log(
+            `[deviceInfo] fetchDeviceInfo returned undefined${nativeError ? `, native error: ${nativeError}` : ' (no native error emitted)'}`,
+          );
+        }
+        return info;
+      } finally {
+        profile.onErrorCallback = noop;
       }
-      return info;
     },
   };
 

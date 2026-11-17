@@ -41,6 +41,7 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<TestCase | null>(null);
   const [reportPath, setReportPath] = useState<string>('');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const scrollRef = useRef<ScrollView>(null);
 
@@ -62,10 +63,13 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
         out.push({ kind: 'header', chapter: tc.chapter });
         currentChapter = tc.chapter;
       }
-      out.push({ kind: 'case', tc });
+      // 收起的大类跳过其下 case。
+      if (!collapsed[tc.chapter]) {
+        out.push({ kind: 'case', tc });
+      }
     }
     return out;
-  }, []);
+  }, [collapsed]);
 
   const runSingle = async (tc: TestCase) => {
     setBusy(true);
@@ -148,10 +152,22 @@ export default function AutomationScreen({ visible }: { visible: boolean }) {
 
   const renderRow = ({ item }: { item: ListItem }) => {
     if (item.kind === 'header') {
+      const isCollapsed = !!collapsed[item.chapter];
       return (
-        <View style={styles.header}>
-          <Text style={styles.headerText}>{item.chapter}</Text>
-        </View>
+        <TouchableOpacity
+          style={styles.header}
+          onPress={() =>
+            setCollapsed((prev) => ({
+              ...prev,
+              [item.chapter]: !prev[item.chapter],
+            }))
+          }
+        >
+          <Text style={styles.headerText}>
+            {isCollapsed ? '▸ ' : '▾ '}
+            {item.chapter}
+          </Text>
+        </TouchableOpacity>
       );
     }
     const tc = item.tc;

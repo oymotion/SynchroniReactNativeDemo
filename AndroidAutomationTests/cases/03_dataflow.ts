@@ -397,6 +397,7 @@ export const dataflowCases: TestCase[] = [
     run: async (ctx) => {
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
+      await ctx.prepare(p!);
       const info = await ctx.fetchDeviceInfo(p!);
       if (!info) {
         ctx.skip('无 DeviceInfo');

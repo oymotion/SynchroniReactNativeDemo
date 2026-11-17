@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   AppState,
+  Platform,
   SafeAreaView,
   StatusBar,
   StyleSheet,
@@ -47,7 +48,14 @@ export default function App() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={[
+        styles.container,
+        // 内置 SafeAreaView 在 Android 上不处理状态栏，需手动留出顶部高度，
+        // 否则 Devices 页顶部设备信息会与系统状态栏重叠。
+        { paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
+      ]}
+    >
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
       <View style={styles.body}>
         <View style={tab === 'devices' ? styles.visible : styles.hidden}>

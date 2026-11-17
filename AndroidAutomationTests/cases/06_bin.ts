@@ -101,27 +101,110 @@ export const binCases: TestCase[] = [
     title: 'pauseBinReplay 暂停',
     chapter: '06_Bin录制回放解析',
     priority: 'P0',
-    mode: 'manual',
-    steps: [
-      '先通过 BIN-FUNC-002 或 Demo 启动回放。',
-      '调用 pauseBinReplay(mac)，观察数据停止；返回 "OK"。',
-    ],
+    mode: 'auto',
+    run: async (ctx) => {
+      const binPath = TestConfig.BIN_PATH;
+      if (!binPath) {
+        ctx.skip('未配置 TestConfig.BIN_PATH');
+        return '';
+      }
+      const c = SensorController.Instance;
+      const info = await c.getBinFileInfo(binPath);
+      ctx.assert(info.Valid, 'bin 无效');
+      const profile = c.requireSensor({ Name: info.DeviceName || 'Replay', Address: info.Mac, RSSI: 0 });
+      ctx.assert(!!profile, '无法创建回放 profile');
+      let count = 0;
+      profile!.onSensorNotifyData = (_s: SensorProfile, list: SensorData[]) => {
+        count += list.length;
+      };
+      const ok = await c.replayBinFile(binPath, info.Mac, true, 30000);
+      ctx.assert(ok === true, 'replayBinFile 应返回 true');
+      await ctx.waitFor(() => count > 0, TestConfig.DATA_TIMEOUT_MS, 'replay data');
+      const r = await c.pauseBinReplay(info.Mac);
+      ctx.assert(typeof r === 'string' && !r.startsWith('Error'), `pauseBinReplay 应成功，实际 ${r}`);
+      // pause 后先等缓冲批次投递完（延迟消退），再观察增量，避免把缓冲尾流误判为未暂停。
+      await ctx.sleep(2000);
+      const before = count;
+      await ctx.sleep(2000);
+      const growth = count - before;
+      ctx.assert(growth === 0, `暂停后数据应停止增长，实际增量 ${growth}`);
+      await c.stopBinReplay(info.Mac);
+      profile!.onSensorNotifyData = () => {};
+      return `pause ok (growth=${growth})`;
+    },
   },
   {
     id: 'BIN-FUNC-004',
     title: 'resumeBinReplay 恢复',
     chapter: '06_Bin录制回放解析',
     priority: 'P0',
-    mode: 'manual',
-    steps: ['回放暂停后调用 resumeBinReplay(mac)，观察数据恢复。'],
+    mode: 'auto',
+    run: async (ctx) => {
+      const binPath = TestConfig.BIN_PATH;
+      if (!binPath) {
+        ctx.skip('未配置 TestConfig.BIN_PATH');
+        return '';
+      }
+      const c = SensorController.Instance;
+      const info = await c.getBinFileInfo(binPath);
+      ctx.assert(info.Valid, 'bin 无效');
+      const profile = c.requireSensor({ Name: info.DeviceName || 'Replay', Address: info.Mac, RSSI: 0 });
+      ctx.assert(!!profile, '无法创建回放 profile');
+      let count = 0;
+      profile!.onSensorNotifyData = (_s: SensorProfile, list: SensorData[]) => {
+        count += list.length;
+      };
+      const ok = await c.replayBinFile(binPath, info.Mac, true, 30000);
+      ctx.assert(ok === true, 'replayBinFile 应返回 true');
+      await ctx.waitFor(() => count > 0, TestConfig.DATA_TIMEOUT_MS, 'replay data');
+      await c.pauseBinReplay(info.Mac);
+      await ctx.sleep(1000);
+      const paused = count;
+      const r = await c.resumeBinReplay(info.Mac);
+      ctx.assert(typeof r === 'string' && !r.startsWith('Error'), `resumeBinReplay 应成功，实际 ${r}`);
+      await ctx.sleep(2000);
+      const growth = count - paused;
+      ctx.assert(growth > 0, `恢复后数据应继续增长，实际增量 ${growth}`);
+      await c.stopBinReplay(info.Mac);
+      profile!.onSensorNotifyData = () => {};
+      return `resume ok (growth=${growth})`;
+    },
   },
   {
     id: 'BIN-FUNC-005',
     title: 'stopBinReplay 停止',
     chapter: '06_Bin录制回放解析',
     priority: 'P0',
-    mode: 'manual',
-    steps: ['回放中调用 stopBinReplay(mac)，观察数据停止与 onDataTransferStateChange=false。'],
+    mode: 'auto',
+    run: async (ctx) => {
+      const binPath = TestConfig.BIN_PATH;
+      if (!binPath) {
+        ctx.skip('未配置 TestConfig.BIN_PATH');
+        return '';
+      }
+      const c = SensorController.Instance;
+      const info = await c.getBinFileInfo(binPath);
+      ctx.assert(info.Valid, 'bin 无效');
+      const profile = c.requireSensor({ Name: info.DeviceName || 'Replay', Address: info.Mac, RSSI: 0 });
+      ctx.assert(!!profile, '无法创建回放 profile');
+      let count = 0;
+      profile!.onSensorNotifyData = (_s: SensorProfile, list: SensorData[]) => {
+        count += list.length;
+      };
+      const ok = await c.replayBinFile(binPath, info.Mac, true, 30000);
+      ctx.assert(ok === true, 'replayBinFile 应返回 true');
+      await ctx.waitFor(() => count > 0, TestConfig.DATA_TIMEOUT_MS, 'replay data');
+      const r = await c.stopBinReplay(info.Mac);
+      ctx.assert(typeof r === 'string' && !r.startsWith('Error'), `stopBinReplay 应成功，实际 ${r}`);
+      // stop 后先等缓冲尾流投递完，再观察增量，避免把缓冲尾流误判为未停止。
+      await ctx.sleep(2000);
+      const before = count;
+      await ctx.sleep(2000);
+      const growth = count - before;
+      ctx.assert(growth === 0, `停止后数据应停止增长，实际增量 ${growth}`);
+      profile!.onSensorNotifyData = () => {};
+      return `stop ok (growth=${growth})`;
+    },
   },
   {
     id: 'BIN-BND-001',
@@ -210,23 +293,101 @@ export const binCases: TestCase[] = [
     title: '回放期间重复 pause/resume',
     chapter: '06_Bin录制回放解析',
     priority: 'P1',
-    mode: 'manual',
-    steps: ['回放中快速交替 pause/resume 多次，观察无死锁、无异常。'],
+    mode: 'auto',
+    run: async (ctx) => {
+      const binPath = TestConfig.BIN_PATH;
+      if (!binPath) {
+        ctx.skip('未配置 TestConfig.BIN_PATH');
+        return '';
+      }
+      const c = SensorController.Instance;
+      const info = await c.getBinFileInfo(binPath);
+      ctx.assert(info.Valid, 'bin 无效');
+      const profile = c.requireSensor({ Name: info.DeviceName || 'Replay', Address: info.Mac, RSSI: 0 });
+      ctx.assert(!!profile, '无法创建回放 profile');
+      let count = 0;
+      profile!.onSensorNotifyData = (_s: SensorProfile, list: SensorData[]) => {
+        count += list.length;
+      };
+      const ok = await c.replayBinFile(binPath, info.Mac, true, 30000);
+      ctx.assert(ok === true, 'replayBinFile 应返回 true');
+      await ctx.waitFor(() => count > 0, TestConfig.DATA_TIMEOUT_MS, 'replay data');
+      // 快速交替 pause/resume 多次，断言无死锁无异常。
+      for (let i = 0; i < 3; i++) {
+        await c.pauseBinReplay(info.Mac);
+        await c.resumeBinReplay(info.Mac);
+      }
+      // 最后一次为 resume，数据应继续增长。
+      await ctx.sleep(2000);
+      const before = count;
+      await ctx.sleep(1500);
+      const growth = count - before;
+      ctx.assert(growth > 0, `最后一次 resume 后数据应继续增长，实际增量 ${growth}`);
+      await c.stopBinReplay(info.Mac);
+      profile!.onSensorNotifyData = () => {};
+      return `repeated pause/resume ok (growth=${growth})`;
+    },
   },
   {
     id: 'BIN-ROB-002',
     title: '回放未开始时 pause/stop',
     chapter: '06_Bin录制回放解析',
     priority: 'P1',
-    mode: 'manual',
-    steps: ['未回放时调用 pauseBinReplay/stopBinReplay(mac)，观察不崩溃。'],
+    mode: 'auto',
+    run: async (ctx) => {
+      const binPath = TestConfig.BIN_PATH;
+      if (!binPath) {
+        ctx.skip('未配置 TestConfig.BIN_PATH');
+        return '';
+      }
+      const c = SensorController.Instance;
+      const info = await c.getBinFileInfo(binPath);
+      ctx.assert(info.Valid, 'bin 无效');
+      // 未回放时调用 pause/stop（合法 MAC 但未起播），观察不崩溃（返回值可为 "Error: ..." 或 "OK"，以实测为准）。
+      const results: string[] = [];
+      for (const op of ['pause', 'stop'] as const) {
+        try {
+          const r = op === 'pause' ? await c.pauseBinReplay(info.Mac) : await c.stopBinReplay(info.Mac);
+          results.push(`${op}=${r}`);
+        } catch (e) {
+          results.push(`${op}=throw:${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      return `no-replay control tolerant: ${results.join(' ')}`;
+    },
   },
   {
     id: 'BIN-ROB-003',
     title: '回放中 terminate',
     chapter: '06_Bin录制回放解析',
     priority: 'P1',
-    mode: 'manual',
-    steps: ['回放中调用 terminate()，观察数据停止、控制器重置、无崩溃。'],
+    mode: 'auto',
+    run: async (ctx) => {
+      const binPath = TestConfig.BIN_PATH;
+      if (!binPath) {
+        ctx.skip('未配置 TestConfig.BIN_PATH');
+        return '';
+      }
+      const c = SensorController.Instance;
+      const info = await c.getBinFileInfo(binPath);
+      ctx.assert(info.Valid, 'bin 无效');
+      const profile = c.requireSensor({ Name: info.DeviceName || 'Replay', Address: info.Mac, RSSI: 0 });
+      ctx.assert(!!profile, '无法创建回放 profile');
+      let count = 0;
+      profile!.onSensorNotifyData = (_s: SensorProfile, list: SensorData[]) => {
+        count += list.length;
+      };
+      const ok = await c.replayBinFile(binPath, info.Mac, true, 30000);
+      ctx.assert(ok === true, 'replayBinFile 应返回 true');
+      await ctx.waitFor(() => count > 0, TestConfig.DATA_TIMEOUT_MS, 'replay data');
+      await c.terminate();
+      // terminate 后先等缓冲尾流，再观察数据停止。
+      await ctx.sleep(2000);
+      const before = count;
+      await ctx.sleep(2000);
+      const growth = count - before;
+      ctx.assert(growth === 0, `terminate 后数据应停止，实际增量 ${growth}`);
+      return `terminate ok (growth=${growth})`;
+    },
   },
 ];

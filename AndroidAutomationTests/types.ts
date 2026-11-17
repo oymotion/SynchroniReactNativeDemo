@@ -26,6 +26,10 @@ export interface TestContext {
   scanTarget(timeoutMs?: number): Promise<BLEDevice | undefined>;
   /** 扫描目标设备并 requireSensor；未找到返回 undefined。 */
   requireTarget(): Promise<SensorProfile | undefined>;
+  /** 扫描所有已登记设备（TestConfig.DEVICES）并返回匹配列表。 */
+  scanKnownDevices(timeoutMs?: number): Promise<BLEDevice[]>;
+  /** 扫描并连接（含 init）所有已登记设备，返回已 Ready 的 profile 列表；单个失败仅记日志。 */
+  requireKnownDevices(): Promise<SensorProfile[]>;
   /** 确保连接 Ready 且已 init。 */
   prepare(profile: SensorProfile): Promise<void>;
   /** 确保已起流，捕获第一包数据并返回 clone（供访问器/边界用例）。 */

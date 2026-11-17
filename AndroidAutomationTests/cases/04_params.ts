@@ -10,6 +10,15 @@ const CANDIDATE_RATE_LISTS = [
   'SPO2_SAMPLE_RATE_LIST',
 ];
 
+/** setParam 在 native 侧失败会 reject（抛异常），这里转成字符串返回，便于带 key 定位是哪个开关失败。 */
+async function safeSetParam(p: SensorProfile, key: string, value: string): Promise<string> {
+  try {
+    return await p.setParam(key, value);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
 async function findRateListKey(p: SensorProfile): Promise<string | undefined> {
   for (const key of CANDIDATE_RATE_LISTS) {
     const s = await p.getParam(key);
@@ -34,6 +43,7 @@ export const paramCases: TestCase[] = [
       const s = await p!.getParam('NTF');
       ctx.assert(!s.startsWith('Error'), `getParam(NTF) 失败: ${s}`);
       ctx.assert(s.includes('|'), 'NTF 列表格式异常');
+      await p!.disconnect();
       return s;
     },
   },
@@ -49,6 +59,7 @@ export const paramCases: TestCase[] = [
       await ctx.prepare(p!);
       const s = await p!.getParam('FILTER');
       ctx.assert(typeof s === 'string', 'getParam(FILTER) 应返回字符串');
+      await p!.disconnect();
       return s.startsWith('Error') ? 'FILTER not supported (recorded)' : s;
     },
   },
@@ -64,14 +75,34 @@ export const paramCases: TestCase[] = [
       await ctx.prepare(p!);
       const ntf = await p!.getParam('NTF');
       ctx.assert(!ntf.startsWith('Error'), `getParam(NTF) 失败: ${ntf}`);
-      const m = ntf.match(/(NTF_[A-Z0-9_]+)\|ON/);
-      ctx.assert(!!m, `无法从 NTF 解析流开关: ${ntf}`);
-      const key = m![1];
-      const off = await p!.setParam(key, 'OFF');
-      ctx.assert(off === 'OK', `setParam(${key},OFF) 应为 OK，实际 ${off}`);
-      const on = await p!.setParam(key, 'ON');
-      ctx.assert(on === 'OK', `setParam(${key},ON) 应为 OK，实际 ${on}`);
-      return `${key} toggled`;
+      // 逐个遍历 NTF 里所有受支持的流开关（含 EEG/EMG），每个都做 ON/OFF 下发并回读，
+      // 而非只取第一个（原来只测到 NTF_ANGLE）。
+      const entries = [...ntf.matchAll(/(NTF_[A-Z0-9_]+)\|(ON|OFF)/g)];
+      ctx.assert(entries.length > 0, `无法从 NTF 解析流开关: ${ntf}`);
+      const toggled: string[] = [];
+      const failed: string[] = [];
+      for (const m of entries) {
+        const key = m[1];
+        const orig = m[2];
+        const flip = orig === 'ON' ? 'OFF' : 'ON';
+        ctx.log(`[PARAM-FUNC-003] toggling ${key}: ${orig} -> ${flip}`);
+        const a = await safeSetParam(p!, key, flip);
+        let back = '';
+        try {
+          back = await p!.getParam('NTF');
+        } catch (e) {
+          back = e instanceof Error ? e.message : String(e);
+        }
+        const b = await safeSetParam(p!, key, orig);
+        const ok = a === 'OK' && new RegExp(`${key}\\|${flip}`).test(back) && b === 'OK';
+        toggled.push(key);
+        if (!ok) {
+          failed.push(`${key}(set=${a},readback=${back},restore=${b})`);
+        }
+      }
+      await p!.disconnect();
+      ctx.assert(failed.length === 0, `以下流开关失败: ${failed.join(' | ')}`);
+      return `${toggled.join(',')} toggled`;
     },
   },
   {
@@ -96,7 +127,51 @@ export const paramCases: TestCase[] = [
       ctx.assert(ok === 'OK', `setParam(${rateKey},${rates[0]}) 应为 OK: ${ok}`);
       const back = await p!.getParam(rateKey);
       ctx.assert(back === rates[0], `回读应一致: ${back} vs ${rates[0]}`);
+      await p!.disconnect();
       return `${rateKey}=${rates[0]}`;
+    },
+  },
+  {
+    id: 'PARAM-FUNC-006',
+    title: 'setParam 滤波开关',
+    chapter: '04_参数',
+    priority: 'P1',
+    mode: 'auto',
+    run: async (ctx) => {
+      const p = await ctx.requireTarget();
+      ctx.assert(!!p, '目标设备未找到');
+      await ctx.prepare(p!);
+      const f = await p!.getParam('FILTER');
+      if (f.startsWith('Error') || !f) {
+        await p!.disconnect();
+        ctx.skip(`无滤波能力: ${f || '(empty)'}`);
+      }
+      const entries = [...f.matchAll(/(FILTER_[A-Z0-9_]+)\|(ON|OFF)/g)];
+      ctx.assert(entries.length > 0, `无法从 FILTER 解析滤波开关: ${f}`);
+      const toggled: string[] = [];
+      const failed: string[] = [];
+      for (const m of entries) {
+        const key = m[1];
+        const orig = m[2];
+        const flip = orig === 'ON' ? 'OFF' : 'ON';
+        ctx.log(`[PARAM-FUNC-006] toggling ${key}: ${orig} -> ${flip}`);
+        const a = await safeSetParam(p!, key, flip);
+        let back = '';
+        try {
+          back = await p!.getParam('FILTER');
+        } catch (e) {
+          back = e instanceof Error ? e.message : String(e);
+        }
+        const b = await safeSetParam(p!, key, orig);
+        const ok = a === 'OK' && new RegExp(`${key}\\|${flip}`).test(back) && b === 'OK';
+        toggled.push(key);
+        if (!ok) {
+          failed.push(`${key}(set=${a},readback=${back},restore=${b})`);
+        }
+      }
+      await p!.disconnect();
+      ctx.assert(failed.length === 0, `以下滤波开关失败: ${failed.join(' | ')}`);
+      return `${toggled.join(',')} toggled`;
     },
   },
   {
@@ -115,6 +190,7 @@ export const paramCases: TestCase[] = [
       }
       const list = await p!.getParam(listKey!);
       ctx.assert(!list.startsWith('Error'), `查询档位失败: ${list}`);
+      await p!.disconnect();
       return `${listKey}=${list}`;
     },
   },
@@ -168,6 +244,7 @@ export const paramCases: TestCase[] = [
       ctx.assert(dataKey.startsWith('Error') || dataKey.startsWith('Not supported'),
         `NTF_ANGLE_DATA 应为 Error/Not supported，实际 ${dataKey}`);
       await p!.setParam('NTF_ANGLE', 'ON');
+      await p!.disconnect();
       return 'angle switch isolated';
     },
   },
@@ -184,6 +261,7 @@ export const paramCases: TestCase[] = [
       const mag = await p!.setParam('NTF_MAG', 'OFF');
       ctx.assert(mag.startsWith('Error') || mag.startsWith('Not supported'),
         `NTF_MAG 应为 Error/Not supported，实际 ${mag}`);
+      await p!.disconnect();
       return `NTF_MAG -> ${mag}`;
     },
   },
@@ -218,10 +296,22 @@ export const paramCases: TestCase[] = [
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       await ctx.prepare(p!);
-      const s = await p!.setParam('NOT_EXIST_KEY', '1');
-      ctx.assert(s.startsWith('Error') || s.startsWith('Not supported'),
-        `非法 key 应返回 Error，实际 ${s}`);
-      return s;
+      // RN setParam 对「未知 key」是 reject（抛异常），不是返回 "Error: ..." 字符串
+      // （README 明确要求 try/catch）；返回 "Error/Not supported" 字符串的是 getParam 语义。
+      let threw = false;
+      let msg = '';
+      try {
+        msg = await p!.setParam('NOT_EXIST_KEY', '1');
+      } catch (e) {
+        threw = true;
+        msg = e instanceof Error ? e.message : String(e);
+      }
+      ctx.assert(
+        threw || msg.startsWith('Error') || msg.startsWith('Not supported'),
+        `非法 key 应被拒绝（抛异常或返回 Error/Not supported），实际 ${msg}`,
+      );
+      await p!.disconnect();
+      return threw ? `rejected: ${msg}` : msg;
     },
   },
   {
@@ -242,6 +332,7 @@ export const paramCases: TestCase[] = [
       const s = await p!.setParam(rateKey, '9999');
       ctx.assert(s.startsWith('Error') || s.startsWith('Not supported'),
         `非法档位应返回 Error，实际 ${s}`);
+      await p!.disconnect();
       return s;
     },
   },
@@ -304,6 +395,7 @@ export const paramCases: TestCase[] = [
         threw = true;
       }
       ctx.assert(!threw, '连续 getParam 不应抛异常');
+      await p!.disconnect();
       return 'ok';
     },
   },
@@ -325,6 +417,7 @@ export const paramCases: TestCase[] = [
       const ok = await p!.startDataNotification();
       ctx.assert(ok === true, '参数后起流应成功');
       await p!.stopDataNotification();
+      await p!.disconnect();
       return 'ok';
     },
   },
