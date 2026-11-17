@@ -2,6 +2,7 @@ import {
   DataType,
   DeviceStateEx,
   SensorController,
+  SensorData,
 } from '@synchroni/synchroni_sdk_react_native';
 import type { TestCase } from '../types';
 
@@ -19,7 +20,9 @@ export const miscCases: TestCase[] = [
       const info = await ctx.fetchDeviceInfo(p!);
       ctx.assert(!!info, 'fetchDeviceInfo 返回 undefined');
       ctx.assert(p!.getDeviceInfo() === info, 'getDeviceInfo 应返回同一缓存对象');
-      return `model=${info!.ModelName}`;
+      ctx.log('DeviceInfo = ' + JSON.stringify(info, null, 2));
+      await p!.disconnect();
+      return `model=${info!.ModelName} fw=${info!.FirmwareVersion} hw=${info!.HardwareVersion}`;
     },
   },
   {
@@ -35,6 +38,7 @@ export const miscCases: TestCase[] = [
       await p!.fetchDeviceInfo();
       const info = p!.getDeviceInfo();
       ctx.assert(!!info, 'getDeviceInfo 应返回缓存');
+      await p!.disconnect();
       return `model=${info!.ModelName}`;
     },
   },
@@ -50,12 +54,30 @@ export const miscCases: TestCase[] = [
       await ctx.prepare(p!);
       const info = await ctx.fetchDeviceInfo(p!);
       ctx.assert(!!info, 'fetchDeviceInfo 返回 undefined');
-      ctx.assert(typeof info!.ModelName === 'string', 'ModelName');
-      ctx.assert(typeof info!.FirmwareVersion === 'string', 'FirmwareVersion');
-      ctx.assert(typeof info!.EegChannelCount === 'number', 'EegChannelCount');
-      ctx.assert(typeof info!.ImpeChannelCount === 'number', 'ImpeChannelCount');
-      ctx.assert(typeof info!.Backend === 'string', 'Backend');
-      return `model=${info!.ModelName} fw=${info!.FirmwareVersion}`;
+      const d = info!;
+      const stringFields = [
+        'DeviceName', 'ModelName', 'HardwareVersion', 'FirmwareVersion', 'Backend',
+      ] as const;
+      const boolFields = ['IsMTUFine'] as const;
+      const numberFields = [
+        'MTUSize',
+        'EmgChannelCount', 'EegChannelCount', 'EcgChannelCount',
+        'AccChannelCount', 'GyroChannelCount', 'BrthChannelCount', 'PpgChannelCount',
+        'Spo2ChannelCount', 'QuatChannelCount', 'EulerChannelCount', 'AngleChannelCount',
+        'ImpeChannelCount', 'EmgSampleRate', 'EegSampleRate', 'EcgSampleRate',
+        'AccSampleRate', 'GyroSampleRate', 'BrthSampleRate', 'PpgSampleRate',
+        'Spo2SampleRate', 'QuatSampleRate', 'EulerSampleRate', 'AngleSampleRate',
+        'ImpeSampleRate', 'EmgMaxSampleRate', 'EegMaxSampleRate', 'EcgMaxSampleRate',
+        'ConnectionIntervalMs', 'PeripheralLatency', 'SupervisionTimeoutMs',
+        'EmgGain', 'EegGain', 'EcgGain', 'GestChannelCount', 'GestSampleRate',
+        'MagChannelCount', 'MagSampleRate',
+      ] as const;
+      for (const f of stringFields) ctx.assert(typeof d[f] === 'string', `DeviceInfo.${f}`);
+      for (const f of boolFields) ctx.assert(typeof d[f] === 'boolean', `DeviceInfo.${f}`);
+      for (const f of numberFields) ctx.assert(typeof d[f] === 'number', `DeviceInfo.${f}`);
+      ctx.log('DeviceInfo = ' + JSON.stringify(info, null, 2));
+      await p!.disconnect();
+      return `model=${d.ModelName} fw=${d.FirmwareVersion} hw=${d.HardwareVersion}`;
     },
   },
   {
@@ -132,6 +154,7 @@ export const miscCases: TestCase[] = [
       await ctx.prepare(p!);
       const ok = await p!.init(32, 60000);
       ctx.assert(ok === true, '重复 init 应返回 true（缓存）');
+      await p!.disconnect();
       return 'idempotent';
     },
   },
@@ -214,10 +237,23 @@ export const miscCases: TestCase[] = [
     title: 'SensorData 空 infoBuffer 字段默认值',
     chapter: '10_底层接口与边界补充',
     priority: 'P1',
-    mode: 'manual',
-    steps: [
-      '由原生层构造 infoBuffer 长度 < INFO_SIZE 的 SensorData 实例。',
-      '逐一读 dataType/sampleRate/channelCount/sampleCount/lostPackageCount/channelMask/deviceMac/deviceName，应为 0/0/0/0/0/0n/""/""，不抛异常。',
-    ],
+    mode: 'auto',
+    run: async (ctx) => {
+      const d = new SensorData({
+        infoBuffer: new ArrayBuffer(0),
+        startSampleIndex: 0,
+        startTimeStamp: 0,
+        samplesBuffer: new ArrayBuffer(0),
+      });
+      ctx.assert((d.dataType as number) === 0, `dataType 应为 0，实际 ${d.dataType}`);
+      ctx.assert(d.sampleRate === 0, `sampleRate 应为 0，实际 ${d.sampleRate}`);
+      ctx.assert(d.channelCount === 0, `channelCount 应为 0，实际 ${d.channelCount}`);
+      ctx.assert(d.sampleCount === 0, `sampleCount 应为 0，实际 ${d.sampleCount}`);
+      ctx.assert(d.lostPackageCount === 0, `lostPackageCount 应为 0，实际 ${d.lostPackageCount}`);
+      ctx.assert(d.channelMask === 0n, `channelMask 应为 0n，实际 ${d.channelMask}`);
+      ctx.assert(d.deviceMac === '', `deviceMac 应为 ''，实际 ${JSON.stringify(d.deviceMac)}`);
+      ctx.assert(d.deviceName === '', `deviceName 应为 ''，实际 ${JSON.stringify(d.deviceName)}`);
+      return 'default values ok';
+    },
   },
 ];

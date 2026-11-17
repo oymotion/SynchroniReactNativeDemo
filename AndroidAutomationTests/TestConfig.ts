@@ -24,6 +24,12 @@ export const TestConfig = {
   /** 连接后的 Ready 等待上限（毫秒）。 */
   READY_TIMEOUT_MS: 15000,
 
+  /** connect() 原生调用在 JS 侧的等待上限（毫秒），避免设备不可达时无限挂起。 */
+  CONNECT_TIMEOUT_MS: 15000,
+
+  /** fetchDeviceInfo/getDeviceInfo 原生调用在 JS 侧的等待上限（毫秒）。 */
+  DEVICE_INFO_TIMEOUT_MS: 10000,
+
   /** 等待首包数据上限（毫秒）。 */
   DATA_TIMEOUT_MS: 10000,
 
