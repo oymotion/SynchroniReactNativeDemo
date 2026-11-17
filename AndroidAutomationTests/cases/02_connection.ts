@@ -64,7 +64,7 @@ export const connectionCases: TestCase[] = [
       } catch (e) {
         settled = false;
       }
-      const after = `state=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, isReady=${p!.isReady}, hasInited=${p!.hasInited}, isReconnecting=${p!.isReconnecting}`;
+      const after = `state=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, isReady=${p!.isReady}, hasInited=${p!.hasInited}, isAutoReconnecting=${p!.isAutoReconnecting}`;
       ctx.assert(ok, `disconnect 应返回 true，实际 ${ok}`);
       ctx.assert(settled, `deviceState 未到 Disconnected（连接前=${before}，断开后=${after}）`);
       ctx.assert(!p!.isReady, `断开后 isReady 应为 false，实际 ${p!.isReady}`);
@@ -138,7 +138,7 @@ export const connectionCases: TestCase[] = [
   },
   {
     id: 'DEV-SM-008',
-    title: 'isReconnecting/isDataTransfering 初始值 false',
+    title: 'isAutoReconnecting/isDataTransfering 初始值 false',
     chapter: '02_连接与状态机',
     priority: 'P1',
     mode: 'auto',
@@ -148,7 +148,7 @@ export const connectionCases: TestCase[] = [
       if (p!.isReady) {
         await p!.disconnect();
       }
-      ctx.assert(p!.isReconnecting === false, 'isReconnecting 应为 false');
+      ctx.assert(p!.isAutoReconnecting === false, 'isAutoReconnecting 应为 false');
       ctx.assert(p!.isDataTransfering === false, 'isDataTransfering 应为 false');
       ctx.assert(p!.hasInited === false, '断开后 hasInited 应为 false');
       return 'initial flags ok';
@@ -326,7 +326,7 @@ export const connectionCases: TestCase[] = [
       ctx.log('已检测到断链。第 2 步：请重新打开设备电源，等待 15 秒确认不自动重连…');
       await ctx.sleep(15000);
       ctx.assert(!p!.isReady, `autoReconnect=false 时不应自动恢复 Ready，实际 isReady=${p!.isReady}`);
-      ctx.assert(p!.isReconnecting === false, `isReconnecting 应为 false，实际 ${p!.isReconnecting}`);
+      ctx.assert(p!.isAutoReconnecting === false, `isAutoReconnecting 应为 false，实际 ${p!.isAutoReconnecting}`);
       p!.autoReconnect = true;
       await p!.disconnect();
       return '重新开机后仍未自动重连（符合预期）';
@@ -365,7 +365,7 @@ export const connectionCases: TestCase[] = [
       } catch (e) {
         cbOk = false;
       }
-      const diag = `回调触发=${answered}, isReady=${p!.isReady}, deviceState=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, isReconnecting=${p!.isReconnecting}`;
+      const diag = `回调触发=${answered}, isReady=${p!.isReady}, deviceState=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, isAutoReconnecting=${p!.isAutoReconnecting}`;
       ctx.log(`等待回调结束诊断：${diag}`);
       ctx.assert(cbOk, `onAutoReconnect 回调未触发（${diag}）。若 isReady=true 说明已重连但未回调，疑似真 bug`);
       p!.onAutoReconnect = undefined;

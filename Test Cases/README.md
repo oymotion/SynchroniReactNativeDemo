@@ -1,6 +1,6 @@
 # Synchroni React Native SDK 测试用例（总览）
 
-本目录针对 **Synchroni React Native SDK**（npm 包 `@synchroni/synchroni_sdk_react_native@1.4.2`，
+本目录针对 **Synchroni React Native SDK**（npm 包 `@synchroni/synchroni_sdk_react_native@1.4.6`，
 Demo 工程 `SynchroniReactNativeDemo`，React Native 0.86.2 / React 19.2.3），按模块拆分用例文件，
 覆盖 SDK 全部对外接口，覆盖正向 / 反向 / 边界 / 异常，并额外覆盖**平板系统异常**（蓝牙开关、WiFi 开关、
 消息/来电打断、前后台切换、锁屏、旋转、分屏、权限等）。
@@ -19,7 +19,7 @@ Demo 工程 `SynchroniReactNativeDemo`，React Native 0.86.2 / React 19.2.3）�
 
 ## 二、SDK 版本与接口快照
 
-- SDK：`@synchroni/synchroni_sdk_react_native@1.4.2`（底层原生 `capiVersion` 与 `getVersion()` 以实测为准）。
+- SDK：`@synchroni/synchroni_sdk_react_native@1.4.6`（底层原生 `capiVersion` 与 `getVersion()` 以实测为准）。
 - 与 Python 侧语义一致，但有以下 **RN 特有/命名差异**，写用例时注意：
 
 | 项 | Python | React Native |
@@ -27,6 +27,7 @@ Demo 工程 `SynchroniReactNativeDemo`，React Native 0.86.2 / React 19.2.3）�
 | 控制器 | 单例 `SensorControllerInstance` | 单例 `SensorController.Instance` |
 | 扫描 | `scan/asyncScan/startScan/stopScan` | `startScan/stopScan/scanOnce` |
 | 扫描回调 | `onDeviceFoundCallback` | `onScanResult`（推送整表） |
+| 扫描状态回调 | 无 | `onScanStateChange(isScanning, errorMsg)` |
 | 蓝牙使能回调 | `onEnableCallback` | `onEnableChanged(enabled)` |
 | 后端 | `getBLEBackendName()` | 控制器 `getParam("BACK_END")` |
 | 状态机 | `DeviceState` | `DeviceStateEx`（Disconnected/Connecting/Connected/Ready/Disconnecting/Invalid） |
@@ -51,6 +52,7 @@ Demo 工程 `SynchroniReactNativeDemo`，React Native 0.86.2 / React 19.2.3）�
 | SensorController | `isEnable` / `onEnableChanged` | CTRL-FUNC-002/003 | SYS-ROB-001 |
 | SensorController | `startScan` / `stopScan` / `scanOnce` | CTRL-FUNC-004/005/006 | CTRL-BND-001/004、CTRL-ROB-001/002 |
 | SensorController | `onScanResult` | CTRL-FUNC-007/008 | CTRL-ROB-002 |
+| SensorController | `onScanStateChange` | CTRL-FUNC-021 | CTRL-ROB-004 |
 | SensorController | `requireSensor` / `getSensor` / `getSensors` | CTRL-FUNC-009/010/011 | CTRL-BND-002/003、MISC-BND-003 |
 | SensorController | `getConnectedSensors` / `getConnectedDevices` | CTRL-FUNC-012 | — |
 | SensorController | `getVersion` / `capiVersion` | CTRL-FUNC-013/014 | MISC-FUNC-004 |
@@ -62,7 +64,7 @@ Demo 工程 `SynchroniReactNativeDemo`，React Native 0.86.2 / React 19.2.3）�
 | SensorController | `onSuspend` | MISC-FUNC-005、SYS-ROB-009 | — |
 | SensorController | `terminate` / `terminateSdk` | CTRL-FUNC-019/020 | MISC-BND-006 |
 | SensorProfile | `connect` / `disconnect` | DEV-SM-001/004 | DEV-SM-002/005/006、SYS-ROB-002 |
-| SensorProfile | 状态属性 `deviceState/isReady/hasInited/isReconnecting/isDataTransfering` | DEV-SM-003/008 | DEV-SM-002 |
+| SensorProfile | 状态属性 `deviceState/isReady/hasInited/isAutoReconnecting/isDataTransfering` | DEV-SM-003/008 | DEV-SM-002 |
 | SensorProfile | `init` | DATA-FUNC-001 | DATA-FUNC-002、DATA-BND-001/002/003、MISC-BND-001 |
 | SensorProfile | `startDataNotification` / `stopDataNotification` | DATA-FUNC-003/004 | DATA-ROB-*、SYS-ROB-002 |
 | SensorProfile | `getBatteryLevel` / `onPowerChanged` | BATT-FUNC-001/002/004 | BATT-FUNC-003 |

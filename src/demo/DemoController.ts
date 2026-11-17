@@ -1250,7 +1250,7 @@ export class DemoController {
   }
 
   private runReadyChainFromState(st: DeviceState): void {
-    if (!st.profile.isReconnecting) this.runReadyChain(st);
+    if (!st.profile.isAutoReconnecting) this.runReadyChain(st);
   }
 
   private async runReadyChain(st: DeviceState): Promise<void> {

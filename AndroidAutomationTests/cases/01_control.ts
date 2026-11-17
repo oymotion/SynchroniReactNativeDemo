@@ -328,6 +328,30 @@ export const controlCases: TestCase[] = [
     },
   },
   {
+    id: 'CTRL-FUNC-021',
+    title: 'onScanStateChange 扫描状态回调',
+    chapter: '01_控制器与扫描',
+    priority: 'P1',
+    mode: 'auto',
+    run: async (ctx) => {
+      const c = SensorController.Instance;
+      const events: Array<{ isScanning: boolean; errorMsg: string }> = [];
+      c.onScanStateChange = (isScanning, errorMsg) => events.push({ isScanning, errorMsg });
+      await c.startScan(3000);
+      await ctx.sleep(500);
+      await c.stopScan();
+      await ctx.sleep(500);
+      c.onScanStateChange = undefined;
+      ctx.assert(events.length >= 2, `应收到起/停两次推送，实际 ${events.length}`);
+      const startEvt = events.find((e) => e.isScanning);
+      const stopEvt = events.find((e) => !e.isScanning);
+      ctx.assert(!!startEvt, '应收到 isScanning=true 的扫描启动回调');
+      ctx.assert(!!stopEvt, '应收到 isScanning=false 的扫描停止回调');
+      ctx.assert((startEvt?.errorMsg ?? '') === '', `启动回调 errorMsg 应为空，实际 "${startEvt?.errorMsg}"`);
+      return `start/stop 回调正常，共 ${events.length} 次`;
+    },
+  },
+  {
     id: 'CTRL-BND-001',
     title: 'startScan(periodInMs) 参数边界',
     chapter: '01_控制器与扫描',
@@ -489,6 +513,32 @@ export const controlCases: TestCase[] = [
       ctx.assert(!threw, '蓝牙关闭时 startScan 不应抛异常');
       ctx.assert(ret === false, `蓝牙关闭时 startScan 应返回 false，实际 ${ret}`);
       return 'graceful false';
+    },
+  },
+  {
+    id: 'CTRL-ROB-004',
+    title: '蓝牙关闭时 onScanStateChange 携带错误信息',
+    chapter: '01_控制器与扫描',
+    priority: 'P1',
+    mode: 'semi-auto',
+    steps: ['关闭系统蓝牙。'],
+    run: async (ctx) => {
+      const c = SensorController.Instance;
+      const events: Array<{ isScanning: boolean; errorMsg: string }> = [];
+      c.onScanStateChange = (isScanning, errorMsg) => events.push({ isScanning, errorMsg });
+      let ret: boolean | undefined;
+      try {
+        ret = await c.startScan(3000);
+      } catch (e) {
+        ret = false;
+      }
+      await ctx.sleep(500);
+      c.onScanStateChange = undefined;
+      ctx.assert(ret === false, `蓝牙关闭时 startScan 应返回 false，实际 ${ret}`);
+      const stopEvt = events.find((e) => !e.isScanning);
+      ctx.assert(!!stopEvt, '应收到 isScanning=false 的回调');
+      ctx.assert((stopEvt?.errorMsg ?? '') !== '', `应收到非空 errorMsg，实际 "${stopEvt?.errorMsg}"`);
+      return `errorMsg="${stopEvt?.errorMsg}"`;
     },
   },
 ];
