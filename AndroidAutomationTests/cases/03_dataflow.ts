@@ -506,34 +506,40 @@ export const dataflowCases: TestCase[] = [
       let last = -1;
       let max = -1;
       let monotonic = true;
+      let changes = 0;
       let dataType = 0;
-      const vals: number[] = [];
+      const transitions: string[] = [];
       p!.onSensorNotifyData = (_s, list) => {
         if (list.length === 0) {
           return;
         }
         const lost = list[0].lostPackageCount;
         dataType = list[0].dataType;
-        vals.push(lost);
         count++;
-        if (last >= 0 && lost < last) {
-          monotonic = false;
-        }
-        last = lost;
         if (lost > max) {
           max = lost;
         }
+        if (lost !== last) {
+          if (last >= 0) {
+            transitions.push(`${last}->${lost}`);
+            if (lost < last) {
+              monotonic = false;
+            }
+            changes++;
+          }
+          last = lost;
+        }
       };
       await p!.startDataNotification();
-      await ctx.sleep(3000);
+      await ctx.sleep(20000);
       await p!.stopDataNotification();
       p!.onSensorNotifyData = () => {};
       ctx.log(
-        `lostPackageCount 采样 type=${dataType} 批数=${count} max=${max} last=${last} 单调不减=${monotonic} 序列=[${vals.join(',')}]`
+        `lostPackageCount 采样 type=${dataType} 批数=${count} max=${max} last=${last} 单调不减=${monotonic} 变化次数=${changes} 走向=[${transitions.join(',')}]`
       );
       ctx.assert(typeof max === 'number' && max >= 0, 'lostPackageCount 应 >=0');
       await p!.disconnect();
-      return `type=${dataType} batches=${count} max=${max} last=${last} monotonic=${monotonic}`;
+      return `type=${dataType} batches=${count} max=${max} last=${last} monotonic=${monotonic} changes=${changes}`;
     },
   },
 ];
