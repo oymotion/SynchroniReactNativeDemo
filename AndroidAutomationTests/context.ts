@@ -10,6 +10,21 @@ import type { TestContext } from './types';
 
 const noop = () => {};
 
+/** 给无 JS 侧超时的原生 Promise 加超时兜底，设备不可达时快速失败而非无限挂起。 */
+async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout: ${what} (${ms}ms)`)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    // 超时后原 promise 仍可能随后 resolve/reject，吞掉避免 unhandledRejection。
+    p.catch(() => {});
+  }
+}
+
 /** 跳过信号：由用例主动抛出，runner 将其记为 SKIP 而非 FAIL。 */
 export class SkipError extends Error {
   constructor(msg: string) {
@@ -81,7 +96,7 @@ export function createContext(log: (msg: string) => void): TestContext {
         }
         try {
           if (!p.isReady) {
-            const ok = await p.connect();
+            const ok = await withTimeout(p.connect(), TestConfig.CONNECT_TIMEOUT_MS, 'connect');
             if (!ok) {
               ctx.log(`[multi] connect failed for ${d.Address}`);
               continue;
@@ -102,7 +117,11 @@ export function createContext(log: (msg: string) => void): TestContext {
 
     async prepare(profile) {
       if (!profile.isReady) {
-        const ok = await profile.connect();
+        const ok = await withTimeout(
+          profile.connect(),
+          TestConfig.CONNECT_TIMEOUT_MS,
+          'connect',
+        );
         ctx.assert(ok, 'connect() returned false');
         await ctx.waitFor(() => profile.isReady, TestConfig.READY_TIMEOUT_MS, 'device Ready');
       }
@@ -158,7 +177,11 @@ export function createContext(log: (msg: string) => void): TestContext {
             : String(reason);
       };
       try {
-        const info = await profile.fetchDeviceInfo();
+        const info = await withTimeout(
+          profile.fetchDeviceInfo(),
+          TestConfig.DEVICE_INFO_TIMEOUT_MS,
+          'fetchDeviceInfo',
+        );
         if (info === undefined) {
           ctx.log(
             `[deviceInfo] fetchDeviceInfo returned undefined${nativeError ? `, native error: ${nativeError}` : ' (no native error emitted)'}`,
