@@ -502,19 +502,38 @@ export const dataflowCases: TestCase[] = [
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       await ctx.prepare(p!);
-      let lost = -1;
+      let count = 0;
+      let last = -1;
+      let max = -1;
+      let monotonic = true;
+      let dataType = 0;
+      const vals: number[] = [];
       p!.onSensorNotifyData = (_s, list) => {
-        if (list.length > 0) {
-          lost = list[0].lostPackageCount;
+        if (list.length === 0) {
+          return;
+        }
+        const lost = list[0].lostPackageCount;
+        dataType = list[0].dataType;
+        vals.push(lost);
+        count++;
+        if (last >= 0 && lost < last) {
+          monotonic = false;
+        }
+        last = lost;
+        if (lost > max) {
+          max = lost;
         }
       };
       await p!.startDataNotification();
       await ctx.sleep(3000);
       await p!.stopDataNotification();
       p!.onSensorNotifyData = () => {};
-      ctx.assert(typeof lost === 'number' && lost >= 0, 'lostPackageCount 应 >=0');
+      ctx.log(
+        `lostPackageCount 采样 type=${dataType} 批数=${count} max=${max} last=${last} 单调不减=${monotonic} 序列=[${vals.join(',')}]`
+      );
+      ctx.assert(typeof max === 'number' && max >= 0, 'lostPackageCount 应 >=0');
       await p!.disconnect();
-      return `lost=${lost}`;
+      return `type=${dataType} batches=${count} max=${max} last=${last} monotonic=${monotonic}`;
     },
   },
 ];
