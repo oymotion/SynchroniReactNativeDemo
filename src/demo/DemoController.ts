@@ -318,6 +318,7 @@ export class DemoController {
   private _autoReconnect = true;
   public debugLogEnabled = true;
   public binDataEnabled = true;
+  public debugDongleEnabled = false;
   /**
    * "Translate IMU" toggle: when on, the SDK broadcasts IMU data as the
    * split ACC/GYRO/EULER/QUAT streams instead of the combined IMU stream.
@@ -422,6 +423,10 @@ export class DemoController {
         'DEBUG_ENABLED',
         this.debugLogEnabled ? 'True' : 'False'
       ).catch((error: unknown) => console.warn('DEBUG_ENABLED failed', error));
+      SensorController.Instance.setParam(
+        'BLE_TRACE_ENABLED',
+        this.debugDongleEnabled ? 'True' : 'False'
+      ).catch((error: unknown) => console.warn('BLE_TRACE_ENABLED failed', error));
     });
     // Ask for all-files access once per app start (session logs/bins).
     if (Platform.OS === 'android') {
@@ -1133,7 +1138,7 @@ export class DemoController {
         this.status = `Replaying: ${st.profile.BLEDevice.Name}`;
         this.notify();
       } else {
-        this.runReadyChain(st);
+        this.runReadyChainFromState(st);
       }
     } else if (newstate === DeviceStateEx.Disconnected) {
       this.autoRecoveryMacs.delete(mac);
@@ -1242,6 +1247,10 @@ export class DemoController {
     this.autoRecoveryMacs.delete(mac);
     this.restoreParamsMacs.delete(mac);
     return false;
+  }
+
+  private runReadyChainFromState(st: DeviceState): void {
+    if (!st.profile.isReconnecting) this.runReadyChain(st);
   }
 
   private async runReadyChain(st: DeviceState): Promise<void> {
@@ -1373,7 +1382,7 @@ export class DemoController {
         !st.isReplay &&
         profile.deviceState === DeviceStateEx.Ready
       ) {
-        this.runReadyChain(st);
+        this.runReadyChainFromState(st);
       }
     }
   }
@@ -1421,10 +1430,7 @@ export class DemoController {
       }
       this.noteRateSamples(st, data.dataType, data.startTimeStamp, valid);
     }
-    st.lostCounts.set(
-      data.dataType,
-      (st.lostCounts.get(data.dataType) ?? 0) + data.lostPackageCount
-    );
+    st.lostCounts.set(data.dataType, data.lostPackageCount);
     // Stream-start wall clock per data type + first-packet delay for the
     // status line.
     if (data.startTimeSec > 0) {
@@ -1888,6 +1894,23 @@ export class DemoController {
     this.debugLogEnabled = enabled;
     this.appLog(`User: SDK debug log ${enabled ? 'ON' : 'OFF'}`);
     await this.applyDebugLog(enabled);
+  };
+
+  public setDebugDongleEnabled = async (enabled: boolean): Promise<void> => {
+    this.debugDongleEnabled = enabled;
+    const value = enabled ? 'True' : 'False';
+    this.appLog(`User: dongle debug ${enabled ? 'ON' : 'OFF'}`);
+    try {
+      const result = await SensorController.Instance.setParam(
+        'BLE_TRACE_ENABLED',
+        value
+      );
+      this.appLog(`App: setParam(BLE_TRACE_ENABLED, ${value}) -> ${result}`);
+    } catch (error) {
+      this.appLog(`App: setParam(BLE_TRACE_ENABLED, ${value}) -> ${String(error)}`);
+      console.warn('BLE_TRACE_ENABLED failed', error);
+    }
+    this.notify();
   };
 
   public setTranslateImu = async (enabled: boolean): Promise<void> => {
