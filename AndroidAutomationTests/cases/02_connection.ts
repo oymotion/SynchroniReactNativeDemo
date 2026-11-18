@@ -349,15 +349,29 @@ export const connectionCases: TestCase[] = [
         await ctx.prepare(p!);
       }
       ctx.assert(p!.isReady, '设备应已连接 Ready');
+      // 关键：onAutoReconnect 是「会话恢复」决策，只有断链前存在可恢复会话
+      // （已 init 且正在推流）时 SDK 才会触发；仅 connect+init 不起流，SDK
+      // 只会重连 BLE 链路而不会询问是否接管，回调永远不触发。
+      const started = await p!.startDataNotification();
+      const snap = () =>
+        `deviceState=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, ` +
+        `isReady=${p!.isReady}, isAutoReconnecting=${p!.isAutoReconnecting}, ` +
+        `isDataTransfering=${p!.isDataTransfering}, hasInited=${p!.hasInited}`;
+      ctx.log(`[起流] startDataNotification=${started}, ${snap()}`);
+      ctx.assert(started, '断链前应成功起流（否则无「上次会话」，onAutoReconnect 不会触发）');
       let answered = false;
-      p!.onAutoReconnect = (_s, _hasLast, answer) => {
+      let cbHasLastSession: boolean | undefined;
+      p!.onAutoReconnect = (_s, hasLast, answer) => {
+        cbHasLastSession = hasLast;
         answer(true);
         answered = true;
       };
       p!.autoReconnect = true;
+      ctx.log(`[开始] ${snap()}`);
       ctx.log('第 1 步：请关闭设备电源，等待断链…');
       await ctx.waitFor(() => !p!.isReady, 60000, '断链（isReady 变 false，超时：设备可能未关闭）');
-      ctx.log('已断链。第 2 步：请重新打开设备电源，等待 onAutoReconnect 回调…');
+      ctx.log(`[已断链] ${snap()}`);
+      ctx.log('第 2 步：请重新打开设备电源，等待 onAutoReconnect 回调…');
       let cbOk = false;
       try {
         await ctx.waitFor(() => answered, 60000, 'onAutoReconnect 回调');
@@ -365,11 +379,16 @@ export const connectionCases: TestCase[] = [
       } catch (e) {
         cbOk = false;
       }
-      const diag = `回调触发=${answered}, isReady=${p!.isReady}, deviceState=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, isAutoReconnecting=${p!.isAutoReconnecting}`;
-      ctx.log(`等待回调结束诊断：${diag}`);
-      ctx.assert(cbOk, `onAutoReconnect 回调未触发（${diag}）。若 isReady=true 说明已重连但未回调，疑似真 bug`);
+      const diag = `回调触发=${answered}, hasLastSession=${cbHasLastSession}, ${snap()}`;
+      ctx.log(`[等待回调结束] ${diag}`);
+      ctx.assert(cbOk, `onAutoReconnect 回调未触发（${diag}）。若 isReady=true 说明已重连但未回调`);
       p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
+      try {
+        await p!.stopDataNotification();
+      } catch (e) {
+        // 清理阶段忽略
+      }
       await p!.disconnect();
       return 'answer(true) 接管恢复成功';
     },
@@ -391,19 +410,38 @@ export const connectionCases: TestCase[] = [
         await ctx.prepare(p!);
       }
       ctx.assert(p!.isReady, '设备应已连接 Ready');
+      // 同 DEV-SM-013：先起流建立「上次会话」，否则 onAutoReconnect 不会触发。
+      const started = await p!.startDataNotification();
+      const snap = () =>
+        `deviceState=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, ` +
+        `isReady=${p!.isReady}, isAutoReconnecting=${p!.isAutoReconnecting}, ` +
+        `isDataTransfering=${p!.isDataTransfering}, hasInited=${p!.hasInited}`;
+      ctx.log(`[起流] startDataNotification=${started}, ${snap()}`);
+      ctx.assert(started, '断链前应成功起流（否则无「上次会话」，onAutoReconnect 不会触发）');
       let answered = false;
-      p!.onAutoReconnect = (_s, _hasLast, answer) => {
+      let cbHasLastSession: boolean | undefined;
+      p!.onAutoReconnect = (_s, hasLast, answer) => {
+        cbHasLastSession = hasLast;
         answer(false);
         answered = true;
       };
       p!.autoReconnect = true;
+      ctx.log(`[开始] ${snap()}`);
       ctx.log('第 1 步：请关闭设备电源，等待断链…');
       await ctx.waitFor(() => !p!.isReady, 60000, '断链（isReady 变 false，超时：设备可能未关闭）');
-      ctx.log('已断链。第 2 步：请重新打开设备电源，等待 answer(false) 默认恢复…');
+      ctx.log(`[已断链] ${snap()}`);
+      ctx.log('第 2 步：请重新打开设备电源，等待 answer(false) 默认恢复…');
       await ctx.waitFor(() => answered, 60000, 'onAutoReconnect 回调（超时：设备可能未重开）');
+      ctx.log(`[已回调] hasLastSession=${cbHasLastSession}, ${snap()}`);
       await ctx.waitFor(() => p!.isReady, 60000, '默认恢复 Ready（超时）');
+      ctx.log(`[默认恢复后] ${snap()}`);
       p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
+      try {
+        await p!.stopDataNotification();
+      } catch (e) {
+        // 清理阶段忽略
+      }
       await p!.disconnect();
       return 'answer(false) 默认恢复成功';
     },
@@ -425,21 +463,39 @@ export const connectionCases: TestCase[] = [
         await ctx.prepare(p!);
       }
       ctx.assert(p!.isReady, '设备应已连接 Ready');
+      // 同 DEV-SM-013：先起流建立「上次会话」，否则 onAutoReconnect 不会触发。
+      const started = await p!.startDataNotification();
+      const snap = () =>
+        `deviceState=${DeviceStateEx[p!.deviceState] ?? p!.deviceState}, ` +
+        `isReady=${p!.isReady}, isAutoReconnecting=${p!.isAutoReconnecting}, ` +
+        `isDataTransfering=${p!.isDataTransfering}, hasInited=${p!.hasInited}`;
+      ctx.log(`[起流] startDataNotification=${started}, ${snap()}`);
+      ctx.assert(started, '断链前应成功起流（否则无「上次会话」，onAutoReconnect 不会触发）');
       let called = false;
-      p!.onAutoReconnect = () => {
+      let cbHasLastSession: boolean | undefined;
+      p!.onAutoReconnect = (_s, hasLast) => {
+        cbHasLastSession = hasLast;
         called = true;
-        // 故意不 answer
+        // 故意不 answer，观察 10s 超时兜底
       };
       p!.autoReconnect = true;
+      ctx.log(`[开始] ${snap()}`);
       ctx.log('第 1 步：请关闭设备电源，等待断链…');
       await ctx.waitFor(() => !p!.isReady, 60000, '断链（isReady 变 false，超时：设备可能未关闭）');
-      ctx.log('已断链。第 2 步：请重新打开设备电源，等待回调触发…');
+      ctx.log(`[已断链] ${snap()}`);
+      ctx.log('第 2 步：请重新打开设备电源，等待回调触发…');
       await ctx.waitFor(() => called, 60000, 'onAutoReconnect 回调（超时：设备可能未重开）');
-      ctx.log('已触发回调（不 answer），等待 12s 观察超时兜底恢复…');
+      ctx.log(`[已回调不answer] hasLastSession=${cbHasLastSession}, ${snap()}，等待 12s 观察超时兜底…`);
       await ctx.sleep(12000);
+      ctx.log(`[超时兜底后] ${snap()}`);
       ctx.assert(p!.isReady, `超时兜底应恢复 Ready，实际 isReady=${p!.isReady}`);
       p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
+      try {
+        await p!.stopDataNotification();
+      } catch (e) {
+        // 清理阶段忽略
+      }
       await p!.disconnect();
       return '超时兜底恢复成功';
     },
