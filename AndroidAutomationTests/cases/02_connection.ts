@@ -1,8 +1,87 @@
 import { DeviceStateEx } from '@synchroni/synchroni_sdk_react_native';
+import type {
+  DeviceInfo,
+  SensorProfile,
+} from '@synchroni/synchroni_sdk_react_native';
 import { TestConfig } from '../TestConfig';
-import type { TestCase } from '../types';
+import type { TestCase, TestContext } from '../types';
 
 const noop = () => {};
+
+/**
+ * 镜像 demo 的「接管式自动重连恢复」：answer(true) 之后由 app 主动重跑会话恢复。
+ * 设备上电后 GATT 先就绪、firmware 应用层后就绪，若立刻 init 会因「init 太早」
+ * 失败并自断开（问题 7749）。所以先用 fetchDeviceInfo 反复探测设备就绪
+ * （fetchDeviceInfo 失败不会自断开），就绪后再 init 一次 + 恢复起流。
+ */
+export async function takeoverRecover(
+  ctx: TestContext,
+  p: SensorProfile,
+  timeoutMs: number,
+): Promise<boolean> {
+  // 1. 等 BLE 链路回到 Ready（native 已完成 BLE 重连）
+  try {
+    await ctx.waitFor(() => p.isReady, timeoutMs, '链路回到 Ready');
+  } catch {
+    return false;
+  }
+  // 2. 探测设备就绪：fetchDeviceInfo 失败不会自断开，可安全重试
+  const deadline = Date.now() + timeoutMs;
+  let info: DeviceInfo | undefined;
+  while (Date.now() < deadline) {
+    if (!p.isReady) {
+      try {
+        await p.connect();
+      } catch {
+        // 链路偶发抖动，继续等
+      }
+      try {
+        await ctx.waitFor(() => p.isReady, TestConfig.READY_TIMEOUT_MS, 'Ready');
+      } catch {
+        continue;
+      }
+    }
+    info = await ctx.fetchDeviceInfo(p);
+    if (info) {
+      break;
+    }
+    await ctx.sleep(2000);
+  }
+  if (!info) {
+    ctx.log('[takeoverRecover] fetchDeviceInfo 探测超时，设备可能仍未就绪');
+    return false;
+  }
+  // 3. 就绪后 init（此时 device-info 可应答，init 应成功）
+  let inited = p.hasInited;
+  if (!inited) {
+    try {
+      inited = await p.init(
+        TestConfig.INIT_PACKAGE_SAMPLE_COUNT,
+        TestConfig.INIT_POWER_REFRESH_MS,
+      );
+    } catch {
+      inited = false;
+    }
+  }
+  if (!inited) {
+    ctx.log('[takeoverRecover] init 失败');
+    return false;
+  }
+  // 4. 恢复起流
+  try {
+    await p.startDataNotification();
+  } catch {
+    ctx.log('[takeoverRecover] startDataNotification 抛异常');
+    return false;
+  }
+  // 5. 等待真正恢复（链路 Ready 且起流恢复）
+  try {
+    await ctx.waitFor(() => p.isReady && p.isDataTransfering, timeoutMs, '恢复起流');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export const connectionCases: TestCase[] = [
   {
@@ -279,13 +358,13 @@ export const connectionCases: TestCase[] = [
   },
   {
     id: 'DEV-SM-011',
-    title: '断连自动重连回到 Ready（autoReconnect=true）',
+    title: '断连自动重连并恢复起流（接管模式，autoReconnect=true）',
     chapter: '02_连接与状态机',
     priority: 'P0',
     mode: 'semi-auto',
     steps: [
       '第 1 步：点击「验证」后，关闭设备电源（制造断链），等待检测到断链',
-      '第 2 步：重新打开设备电源，等待自动重连回到 Ready',
+      '第 2 步：重新打开设备电源，等待 onAutoReconnect 回调后由测试接管恢复起流（isReady 且 isDataTransfering）',
     ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
@@ -293,14 +372,63 @@ export const connectionCases: TestCase[] = [
       if (!p!.isReady) {
         await ctx.prepare(p!);
       }
+      ctx.assert(p!.isReady, '设备应已连接 Ready');
+      // 关键：断链前必须先起流建立「上次会话」，否则 SDK 无会话可恢复，自动重连不会触发（与 DEV-SM-013/014/015 同坑）。
+      const started = await p!.startDataNotification();
+      ctx.assert(started, '断链前应成功起流（否则无「上次会话」，自动重连不会触发）');
       p!.autoReconnect = true;
-      ctx.log('第 1 步：请关闭设备电源，等待检测到断链…');
-      await ctx.waitFor(() => !p!.isReady, 60000, '断链（isReady 变 false，超时：设备可能未关闭）');
-      ctx.log('已检测到断链。第 2 步：请重新打开设备电源，等待自动重连…');
-      await ctx.waitFor(() => p!.isReady, 60000, '自动重连（isReady 变 true，超时：设备可能未重开）');
+      // 接管模式（镜像 demo）：回调里 answer(true)，由测试脚本重跑会话恢复。
+      let answered = false;
+      p!.onAutoReconnect = (_s, _hasLast, answer) => {
+        answer(true);
+        answered = true;
+      };
+      ctx.log('第 1 步：请关闭设备电源，等待 deviceState 变为 Disconnected…');
+      await ctx.waitFor(
+        () => p!.deviceState === DeviceStateEx.Disconnected,
+        60000,
+        '断链（deviceState 变 Disconnected，超时：设备可能未关闭）',
+      );
+      ctx.log(`已断链 deviceState=${DeviceStateEx[p!.deviceState]} isAutoReconnecting=${p!.isAutoReconnecting}`);
+
+      // 稳定窗口：真关机下自动重连不该在 2s 内回 Ready（排除瞬时 BLE 抖动假断链）
+      await ctx.sleep(2000);
+      ctx.assert(
+        !p!.isReady,
+        `断链后 2s 内不应自动回 Ready，实际 deviceState=${DeviceStateEx[p!.deviceState]}`,
+      );
+
+      ctx.log('第 2 步：请重新打开设备电源，等待 onAutoReconnect 回调…');
+      let cbOk = false;
+      try {
+        await ctx.waitFor(() => answered, 60000, 'onAutoReconnect 回调');
+        cbOk = true;
+      } catch (e) {
+        cbOk = false;
+      }
+      ctx.assert(cbOk, 'onAutoReconnect 回调未触发（若 isReady=true 说明已重连但未回调）');
+
+      // 接管恢复：等链路 Ready → 探测设备就绪 → init → 恢复起流
+      const recovered = await takeoverRecover(ctx, p!, 60000);
+      ctx.log(
+        `接管恢复结束 deviceState=${DeviceStateEx[p!.deviceState]} isReady=${p!.isReady} ` +
+          `isAutoReconnecting=${p!.isAutoReconnecting} hasInited=${p!.hasInited} ` +
+          `isDataTransfering=${p!.isDataTransfering}`,
+      );
+      ctx.assert(
+        recovered,
+        `接管后应在超时内恢复 Ready 且起流恢复，实际 deviceState=${DeviceStateEx[p!.deviceState]} ` +
+          `isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+      );
+      p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
+      try {
+        await p!.stopDataNotification();
+      } catch (e) {
+        // 清理阶段忽略
+      }
       await p!.disconnect();
-      return '断链→自动重连成功（已断开清理）';
+      return '断链→接管式自动重连恢复成功（已断开清理）';
     },
   },
   {
@@ -321,9 +449,14 @@ export const connectionCases: TestCase[] = [
       }
       ctx.assert(p!.isReady, '设备应已连接 Ready（否则无法验证断链不重连）');
       p!.autoReconnect = false;
-      ctx.log('第 1 步：请关闭设备电源，等待检测到断链…');
-      await ctx.waitFor(() => !p!.isReady, 60000, '断链（isReady 变 false，超时：设备可能未关闭）');
-      ctx.log('已检测到断链。第 2 步：请重新打开设备电源，等待 15 秒确认不自动重连…');
+      ctx.log('第 1 步：请关闭设备电源，等待 deviceState 变为 Disconnected…');
+      await ctx.waitFor(
+        () => p!.deviceState === DeviceStateEx.Disconnected,
+        60000,
+        '断链（deviceState 变 Disconnected，超时：设备可能未关闭）',
+      );
+      ctx.log(`已断链 deviceState=${DeviceStateEx[p!.deviceState]} isAutoReconnecting=${p!.isAutoReconnecting}`);
+      ctx.log('第 2 步：请重新打开设备电源，等待 15 秒确认不自动重连…');
       await ctx.sleep(15000);
       ctx.assert(!p!.isReady, `autoReconnect=false 时不应自动恢复 Ready，实际 isReady=${p!.isReady}`);
       ctx.assert(p!.isAutoReconnecting === false, `isAutoReconnecting 应为 false，实际 ${p!.isAutoReconnecting}`);
@@ -340,7 +473,7 @@ export const connectionCases: TestCase[] = [
     mode: 'semi-auto',
     steps: [
       '第 1 步：确保设备已连接；点击「验证」后关闭设备电源，等待断链',
-      '第 2 步：重新打开设备电源，等待回调以 answer(true) 接管恢复',
+      '第 2 步：重新打开设备电源，等待回调以 answer(true) 接管，再等 15 秒观察链路重连',
     ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
@@ -382,6 +515,13 @@ export const connectionCases: TestCase[] = [
       const diag = `回调触发=${answered}, hasLastSession=${cbHasLastSession}, ${snap()}`;
       ctx.log(`[等待回调结束] ${diag}`);
       ctx.assert(cbOk, `onAutoReconnect 回调未触发（${diag}）。若 isReady=true 说明已重连但未回调`);
+      // 接管：answer(true) 后由测试脚本重跑会话恢复（等就绪 → 探测 → init → 起流）
+      const recovered = await takeoverRecover(ctx, p!, 60000);
+      ctx.log(`接管恢复结束 ${snap()}`);
+      ctx.assert(
+        recovered,
+        `answer(true) 接管后应恢复 Ready 且起流恢复，实际 ${snap()}`,
+      );
       p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
       try {
@@ -401,7 +541,7 @@ export const connectionCases: TestCase[] = [
     mode: 'semi-auto',
     steps: [
       '第 1 步：确保设备已连接；点击「验证」后关闭设备电源，等待断链',
-      '第 2 步：重新打开设备电源，等待回调以 answer(false) 走默认恢复',
+      '第 2 步：重新打开设备电源，等待回调以 answer(false) 默认恢复，再等 15 秒观察重连',
     ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
@@ -433,8 +573,13 @@ export const connectionCases: TestCase[] = [
       ctx.log('第 2 步：请重新打开设备电源，等待 answer(false) 默认恢复…');
       await ctx.waitFor(() => answered, 60000, 'onAutoReconnect 回调（超时：设备可能未重开）');
       ctx.log(`[已回调] hasLastSession=${cbHasLastSession}, ${snap()}`);
-      await ctx.waitFor(() => p!.isReady, 60000, '默认恢复 Ready（超时）');
-      ctx.log(`[默认恢复后] ${snap()}`);
+      ctx.log('已回调 answer(false)，等待 15 秒观察默认恢复是否真正重连…');
+      await ctx.sleep(15000);
+      ctx.log(`等待 15 秒后 ${snap()}`);
+      ctx.assert(
+        p!.isReady && p!.isDataTransfering,
+        `answer(false) 默认恢复后应回到 Ready 且恢复起流（问题 7749：默认恢复失败），实际 ${snap()}`,
+      );
       p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
       try {
@@ -454,7 +599,7 @@ export const connectionCases: TestCase[] = [
     mode: 'semi-auto',
     steps: [
       '第 1 步：确保设备已连接；点击「验证」后关闭设备电源，等待断链',
-      '第 2 步：重新打开设备电源，等待回调触发后约 10s 超时兜底恢复',
+      '第 2 步：重新打开设备电源，等待回调触发后约 15s 观察超时兜底恢复',
     ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
@@ -485,10 +630,13 @@ export const connectionCases: TestCase[] = [
       ctx.log(`[已断链] ${snap()}`);
       ctx.log('第 2 步：请重新打开设备电源，等待回调触发…');
       await ctx.waitFor(() => called, 60000, 'onAutoReconnect 回调（超时：设备可能未重开）');
-      ctx.log(`[已回调不answer] hasLastSession=${cbHasLastSession}, ${snap()}，等待 12s 观察超时兜底…`);
-      await ctx.sleep(12000);
+      ctx.log(`[已回调不answer] hasLastSession=${cbHasLastSession}, ${snap()}，等待 15s 观察超时兜底…`);
+      await ctx.sleep(15000);
       ctx.log(`[超时兜底后] ${snap()}`);
-      ctx.assert(p!.isReady, `超时兜底应恢复 Ready，实际 isReady=${p!.isReady}`);
+      ctx.assert(
+        p!.isReady && p!.isDataTransfering,
+        `超时兜底（等价 answer(false)）应回到 Ready 且恢复起流（问题 7749：默认恢复失败），实际 ${snap()}`,
+      );
       p!.onAutoReconnect = undefined;
       p!.autoReconnect = false;
       try {
@@ -498,6 +646,75 @@ export const connectionCases: TestCase[] = [
       }
       await p!.disconnect();
       return '超时兜底恢复成功';
+    },
+  },
+  {
+    id: 'DEV-SM-019',
+    title: 'demo 接管式自动重连完整恢复（answer(true)+等就绪+init+起流）',
+    chapter: '02_连接与状态机',
+    priority: 'P1',
+    mode: 'semi-auto',
+    steps: [
+      '第 1 步：点击「验证」后，关闭设备电源（制造断链），等待检测到断链',
+      '第 2 步：重新打开设备电源，等待 onAutoReconnect 回调后接管：等 Ready → 探测就绪 → init → 恢复起流',
+    ],
+    run: async (ctx) => {
+      const p = await ctx.requireTarget();
+      ctx.assert(!!p, '目标设备未找到');
+      if (!p!.isReady) {
+        await ctx.prepare(p!);
+      }
+      ctx.assert(p!.isReady, '设备应已连接 Ready');
+      // 先起流建立「上次会话」，否则 onAutoReconnect 不会触发。
+      const started = await p!.startDataNotification();
+      ctx.assert(started, '断链前应成功起流（否则无「上次会话」，onAutoReconnect 不会触发）');
+      p!.autoReconnect = true;
+      // 完整镜像 demo：answer(true) 接管，随后按 demo 的 settle → 探测 → init → 起流 恢复。
+      let answered = false;
+      p!.onAutoReconnect = (_s, _hasLast, answer) => {
+        answer(true);
+        answered = true;
+      };
+      ctx.log('第 1 步：请关闭设备电源，等待 deviceState 变为 Disconnected…');
+      await ctx.waitFor(
+        () => p!.deviceState === DeviceStateEx.Disconnected,
+        60000,
+        '断链（deviceState 变 Disconnected，超时：设备可能未关闭）',
+      );
+      ctx.log(`已断链 deviceState=${DeviceStateEx[p!.deviceState]} isAutoReconnecting=${p!.isAutoReconnecting}`);
+      await ctx.sleep(2000);
+      ctx.assert(!p!.isReady, `断链后 2s 内不应自动回 Ready，实际 deviceState=${DeviceStateEx[p!.deviceState]}`);
+
+      ctx.log('第 2 步：请重新打开设备电源，等待 onAutoReconnect 回调…');
+      let cbOk = false;
+      try {
+        await ctx.waitFor(() => answered, 60000, 'onAutoReconnect 回调');
+        cbOk = true;
+      } catch (e) {
+        cbOk = false;
+      }
+      ctx.assert(cbOk, 'onAutoReconnect 回调未触发');
+
+      // 接管恢复：镜像 demo 的 settleForRecovery（等 Ready → fetchDeviceInfo 探测就绪 → init → 起流）
+      const recovered = await takeoverRecover(ctx, p!, 60000);
+      ctx.log(
+        `接管恢复结束 deviceState=${DeviceStateEx[p!.deviceState]} isReady=${p!.isReady} ` +
+          `isAutoReconnecting=${p!.isAutoReconnecting} hasInited=${p!.hasInited} ` +
+          `isDataTransfering=${p!.isDataTransfering}`,
+      );
+      ctx.assert(
+        recovered,
+        `接管后应在超时内恢复 Ready 且起流恢复，实际 isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+      );
+      p!.onAutoReconnect = undefined;
+      p!.autoReconnect = false;
+      try {
+        await p!.stopDataNotification();
+      } catch (e) {
+        // 清理阶段忽略
+      }
+      await p!.disconnect();
+      return 'demo 接管式自动重连完整恢复成功（已断开清理）';
     },
   },
 ];

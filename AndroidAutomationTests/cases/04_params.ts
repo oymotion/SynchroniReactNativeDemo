@@ -1,5 +1,6 @@
-import { SensorController } from '@synchroni/synchroni_sdk_react_native';
+import { DataType, SensorController } from '@synchroni/synchroni_sdk_react_native';
 import type { SensorProfile } from '@synchroni/synchroni_sdk_react_native';
+import { TestConfig } from '../TestConfig';
 import type { TestCase } from '../types';
 
 const CANDIDATE_RATE_LISTS = [
@@ -352,17 +353,27 @@ export const paramCases: TestCase[] = [
     run: async (ctx) => {
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
-      await ctx.prepare(p!);
-      const listKey = await findRateListKey(p!);
-      if (!listKey) {
-        ctx.skip('设备不支持采样率参数');
+      try {
+        await ctx.prepare(p!);
+        const listKey = await findRateListKey(p!);
+        if (!listKey) {
+          ctx.skip('设备不支持采样率参数');
+        }
+        const rateKey = listKey!.replace('_LIST', '');
+        // setParam 在 native 侧对「Error: ...」结果走 reject（而非 resolve 返回字符串），
+        // 因此捕获异常信息作为判定依据，而不是读 resolve 的返回值。
+        let s = '';
+        try {
+          s = await p!.setParam(rateKey, '9999');
+        } catch (e) {
+          s = e instanceof Error ? e.message : String(e);
+        }
+        ctx.assert(s.startsWith('Error') || s.startsWith('Not supported'),
+          `非法档位应返回 Error，实际 ${s}`);
+        return s;
+      } finally {
+        await p!.disconnect();
       }
-      const rateKey = listKey!.replace('_LIST', '');
-      const s = await p!.setParam(rateKey, '9999');
-      ctx.assert(s.startsWith('Error') || s.startsWith('Not supported'),
-        `非法档位应返回 Error，实际 ${s}`);
-      await p!.disconnect();
-      return s;
     },
   },
   {
@@ -397,7 +408,14 @@ export const paramCases: TestCase[] = [
       if (p!.isReady) {
         await p!.disconnect();
       }
-      const s = await p!.setParam('NTF_EEG', 'ON');
+      // setParam 在 native 侧对「Error: ...」结果走 reject（而非 resolve 返回字符串），
+      // 因此捕获异常信息作为判定依据。
+      let s = '';
+      try {
+        s = await p!.setParam('NTF_EEG', 'ON');
+      } catch (e) {
+        s = e instanceof Error ? e.message : String(e);
+      }
       ctx.assert(s.startsWith('Error') || s.startsWith('Not supported'),
         `未连接 setParam 应返回 Error，实际 ${s}`);
       return s;
@@ -430,7 +448,7 @@ export const paramCases: TestCase[] = [
   },
   {
     id: 'PARAM-ROB-002',
-    title: '参数下发后立即起流',
+    title: '设置 EEG 采样率 500 并起流验证 EEG 数据',
     chapter: '04_参数',
     priority: 'P1',
     mode: 'auto',
@@ -438,16 +456,67 @@ export const paramCases: TestCase[] = [
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       await ctx.prepare(p!);
-      const ntf = await p!.getParam('NTF');
-      ctx.assert(!ntf.startsWith('Error'), `getParam(NTF) 失败: ${ntf}`);
-      const m = ntf.match(/(NTF_[A-Z0-9_]+)\|ON/);
-      ctx.assert(!!m, `无法解析流开关: ${ntf}`);
-      await p!.setParam(m![1], 'ON');
-      const ok = await p!.startDataNotification();
-      ctx.assert(ok === true, '参数后起流应成功');
-      await p!.stopDataNotification();
-      await p!.disconnect();
-      return 'ok';
+      // 设置 EEG 采样率 500（采样率 key = EEG_SAMPLE_RATE，value 为档位字符串）
+      const s = await safeSetParam(p!, 'EEG_SAMPLE_RATE', '500');
+      ctx.assert(s === 'OK', `EEG_SAMPLE_RATE=500 应返回 OK，实际 ${s}`);
+      // 起流并收集 EEG 数据（按 dataType 隔离，只看 EEG 流）
+      let eegRate = 0;
+      let eegCh = 0;
+      let eegSamples = 0;
+      const firstValues: number[] = [];
+      const absDeltas: number[] = []; // 相邻样本绝对时间戳差（秒），用于验证真实 500Hz
+      let prevAbs = -1;
+      p!.onSensorNotifyData = (_p, list) => {
+        for (const d of list) {
+          if (d.dataType === DataType.NTF_EEG) {
+            eegRate = d.sampleRate;
+            eegCh = d.channelCount;
+            eegSamples = d.sampleCount;
+            if (firstValues.length === 0 && d.sampleCount > 0) {
+              for (let si = 0; si < Math.min(5, d.sampleCount); si++) {
+                firstValues.push(d.getData(0, si));
+              }
+              // 采集第一包 EEG 通道 0 相邻样本的绝对时间戳差（秒）
+              for (let si = 0; si < d.sampleCount; si++) {
+                const abs = d.getAbsTimeStampInSec(0, si);
+                if (abs > 0 && prevAbs > 0) {
+                  absDeltas.push(abs - prevAbs);
+                }
+                prevAbs = abs;
+              }
+            }
+          }
+        }
+      };
+      try {
+        const ok = await p!.startDataNotification();
+        ctx.assert(ok === true, '起流应成功');
+        await ctx.waitFor(
+          () => p!.isDataTransfering && eegSamples > 0,
+          TestConfig.DATA_TIMEOUT_MS,
+          'EEG 起流并收到数据',
+        );
+        ctx.assert(p!.isDataTransfering, '起流后 isDataTransfering 应为 true');
+        ctx.assert(eegSamples > 0, '应收到 EEG 数据');
+        ctx.assert(eegRate === 500, `EEG 采样率应为 500，实际 ${eegRate}`);
+        ctx.assert(eegCh > 0, `EEG 通道数应 >0，实际 ${eegCh}`);
+        // 用相邻样本绝对时间戳差验证真实采样率（500Hz → 1/500 = 0.002s）
+        ctx.assert(absDeltas.length > 0, '应能采集到相邻样本绝对时间戳差（absTimeStamp 未填充）');
+        const expectAbsDelta = 1 / 500;
+        const avgAbsDelta = absDeltas.reduce((a, b) => a + b, 0) / absDeltas.length;
+        ctx.assert(
+          Math.abs(avgAbsDelta - expectAbsDelta) < 0.001,
+          `500Hz 相邻样本绝对时间戳差应 ≈0.002s，实际平均 ${avgAbsDelta.toFixed(6)}s，deltas=[${absDeltas.map((v) => v.toFixed(5)).join(',')}]`,
+        );
+      } finally {
+        p!.onSensorNotifyData = () => {};
+        await p!.stopDataNotification();
+        await p!.disconnect();
+      }
+      const avgAbs = absDeltas.length
+        ? absDeltas.reduce((a, b) => a + b, 0) / absDeltas.length
+        : 0;
+      return `EEG rate=${eegRate} ch=${eegCh} samples=${eegSamples} absDeltaAvg=${avgAbs.toFixed(6)}s ch0前5样本=[${firstValues.map((v) => v.toFixed(2)).join(', ')}]`;
     },
   },
 ];

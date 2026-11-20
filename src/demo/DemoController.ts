@@ -50,6 +50,17 @@ export const PACKAGE_COUNT = 32;
 export const CMD_TIMEOUT_MS = 5000;
 export const PLOT_UPDATE_INTERVAL_MS = 50;
 export const POWER_REFRESH_PERIOD_MS = 60000;
+// Auto-reconnect recovery: a freshly re-powered device may be Ready at the
+// BLE layer before its firmware can answer the init handshake, and the SDK's
+// init() self-disconnects on failure (which would cancel an in-flight retry
+// via flowGeneration++). Instead of retrying init directly, settle the
+// just-rebooted firmware and probe fetchDeviceInfo (no self-disconnect side
+// effect) until the device is ready, then init once — mirroring the Android
+// demo's connect -> wait Ready -> init sequence.
+const AUTO_RECOVERY_SETTLE_MS = 3000;
+const DEVICE_INFO_PROBE_ATTEMPTS = 5;
+const DEVICE_INFO_PROBE_BACKOFF_MS = 2000;
+const READY_WAIT_MS = 10000;
 
 interface DemoStorageSpec {
   isAllFilesAccessGranted(): boolean;
@@ -1253,6 +1264,68 @@ export class DemoController {
     if (!st.profile.isAutoReconnecting) this.runReadyChain(st);
   }
 
+  private async waitForReady(
+    st: DeviceState,
+    generation: number
+  ): Promise<void> {
+    const deadline = Date.now() + READY_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (st.flowGeneration !== generation) {
+        return;
+      }
+      if (st.profile.deviceState === DeviceStateEx.Ready) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
+  /**
+   * Prepare a just-reconnected device for init during auto-recovery. The
+   * firmware may still be booting after a power cycle: settle, then probe
+   * fetchDeviceInfo (which has no self-disconnect side effect, unlike init)
+   * until the device answers, so the single init() that follows succeeds.
+   */
+  private async settleForRecovery(
+    st: DeviceState,
+    generation: number
+  ): Promise<void> {
+    const { profile } = st;
+    await new Promise((r) => setTimeout(r, AUTO_RECOVERY_SETTLE_MS));
+    if (st.flowGeneration !== generation) {
+      return;
+    }
+    for (let attempt = 1; attempt <= DEVICE_INFO_PROBE_ATTEMPTS; attempt++) {
+      if (st.flowGeneration !== generation) {
+        return;
+      }
+      if (profile.deviceState !== DeviceStateEx.Ready) {
+        try {
+          await profile.connect();
+        } catch (error) {
+          console.warn('reconnect before init failed', error);
+        }
+        await this.waitForReady(st, generation);
+      }
+      if (
+        st.flowGeneration !== generation ||
+        profile.deviceState !== DeviceStateEx.Ready
+      ) {
+        await new Promise((r) => setTimeout(r, DEVICE_INFO_PROBE_BACKOFF_MS));
+        continue;
+      }
+      try {
+        const info = await profile.fetchDeviceInfo();
+        if (info) {
+          return;
+        }
+      } catch (error) {
+        console.warn('fetchDeviceInfo probe failed', error);
+      }
+      await new Promise((r) => setTimeout(r, DEVICE_INFO_PROBE_BACKOFF_MS));
+    }
+  }
+
   private async runReadyChain(st: DeviceState): Promise<void> {
     if (st.flowRunning) {
       return;
@@ -1277,8 +1350,20 @@ export class DemoController {
       this.status = `Initializing: ${name}`;
       this.notify();
       if (!profile.hasInited) {
-        const ok = await profile.init(PACKAGE_COUNT, POWER_REFRESH_PERIOD_MS);
-        if (!ok) {
+        if (autoRecovery) {
+          // A re-powered device may not answer the init handshake until its
+          // firmware finishes booting; settle and probe before init so the
+          // single init() below succeeds instead of self-disconnecting.
+          await this.settleForRecovery(st, generation);
+          if (st.flowGeneration !== generation) {
+            return;
+          }
+        }
+        const inited = await profile.init(
+          PACKAGE_COUNT,
+          POWER_REFRESH_PERIOD_MS
+        );
+        if (!inited) {
           this.appLog(
             `App: failed to initialize ${name} (${profile.BLEDevice.Address})`,
             'E',

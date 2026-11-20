@@ -6,6 +6,7 @@ import {
 } from 'react-native-worklets';
 import { TestConfig } from '../TestConfig';
 import type { TestCase } from '../types';
+import { takeoverRecover } from './02_connection';
 
 const noop = () => {};
 
@@ -53,23 +54,23 @@ export const asyncCases: TestCase[] = [
         callbacks += 1;
       };
       await p!.startDataNotification();
-      await ctx.sleep(2000);
+      await ctx.sleep(5000);
       await p!.stopDataNotification();
       p!.onSensorNotifyData = noop;
       await p!.disconnect();
-      ctx.assert(callbacks > 0, '2s 内未收到数据回调');
+      ctx.assert(callbacks > 0, '5s 内未收到数据回调');
       return `callbacks=${callbacks}`;
     },
   },
   {
     id: 'ASYNC-FUNC-003',
-    title: 'autoReconnect answer 异步一次性',
+    title: 'autoReconnect 异步 answer(true) 接管恢复',
     chapter: '09_异步接口',
     priority: 'P1',
     mode: 'semi-auto',
     steps: [
-      '第 1 步：确保设备已连接；点击「验证」后关闭设备电源，等待断链',
-      '第 2 步：重新打开设备电源，等待 onAutoReconnect 回调；回调内异步 answer(true)，随后 answer(false) 应被忽略',
+      '第 1 步：点击「验证」后关闭设备电源，等待断链',
+      '第 2 步：重新打开设备电源，等待 onAutoReconnect 回调；回调内异步 answer(true) 接管（answer(false) 应被忽略），随后由测试接管恢复起流',
     ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
@@ -81,8 +82,12 @@ export const asyncCases: TestCase[] = [
           await ctx.prepare(p!);
         }
         ctx.assert(p!.isReady, '设备应已连接 Ready');
+        // 断链前先起流建立「上次会话」，否则 onAutoReconnect 不会触发。
+        const started = await p!.startDataNotification();
+        ctx.assert(started, '断链前应成功起流（否则无「上次会话」，自动重连不会触发）');
         p!.onAutoReconnect = (_s, _hasLast, answer) => {
           called = true;
+          // 异步 answer(true) 接管；随后 answer(false) 应被忽略（answer 一次性语义）
           setTimeout(() => {
             answer(true);
             answered = true;
@@ -94,15 +99,28 @@ export const asyncCases: TestCase[] = [
         await ctx.waitFor(() => !p!.isReady, 60000, '断链（isReady 变 false，超时：设备可能未关闭）');
         ctx.log('已断链。第 2 步：请重新打开设备电源，等待 onAutoReconnect 回调…');
         await ctx.waitFor(() => called, 60000, 'onAutoReconnect 回调（超时：设备可能未重开）');
-        ctx.log('已触发回调，观察 answer 一次性语义…');
-        await ctx.sleep(500);
         ctx.assert(called, 'onAutoReconnect 回调未触发');
+        // 等异步 answer(true) 生效后接管恢复（与 DEV-SM-011 一致）
+        await ctx.waitFor(() => answered, 5000, '异步 answer(true) 生效');
+        const recovered = await takeoverRecover(ctx, p!, 60000);
+        ctx.log(
+          `接管恢复结束 isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+        );
+        ctx.assert(
+          recovered,
+          `异步 answer(true) 接管后应恢复 Ready 且起流恢复，实际 isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+        );
       } finally {
         p!.onAutoReconnect = undefined;
         p!.autoReconnect = false;
+        try {
+          await p!.stopDataNotification();
+        } catch {
+          // ignore
+        }
         await p!.disconnect();
       }
-      return `answer once (called=${called}, answered=${answered})`;
+      return `async answer(true) 接管恢复成功 (called=${called}, answered=${answered})`;
     },
   },
   {
@@ -213,8 +231,8 @@ export const asyncCases: TestCase[] = [
     priority: 'P1',
     mode: 'semi-auto',
     steps: [
-      '第 1 步：确保设备已连接；点击「验证」后关闭设备电源，等待断链',
-      '第 2 步：重新打开设备电源，等待 onAutoReconnect 回调；回调内连续两次 answer(true)，应只生效一次',
+      '第 1 步：点击「验证」后关闭设备电源，等待断链',
+      '第 2 步：重新打开设备电源，等待 onAutoReconnect 回调；回调内连续两次 answer(true)（第二次应被忽略），随后由测试接管恢复起流',
     ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
@@ -225,8 +243,12 @@ export const asyncCases: TestCase[] = [
           await ctx.prepare(p!);
         }
         ctx.assert(p!.isReady, '设备应已连接 Ready');
+        // 断链前先起流建立「上次会话」，否则 onAutoReconnect 不会触发。
+        const started = await p!.startDataNotification();
+        ctx.assert(started, '断链前应成功起流（否则无「上次会话」，自动重连不会触发）');
         p!.onAutoReconnect = (_s, _hasLast, answer) => {
           called = true;
+          // 连续两次 answer(true)：第二次应被忽略（answer 幂等）
           answer(true);
           answer(true);
         };
@@ -236,12 +258,26 @@ export const asyncCases: TestCase[] = [
         ctx.log('已断链。第 2 步：请重新打开设备电源，等待 onAutoReconnect 回调…');
         await ctx.waitFor(() => called, 60000, 'onAutoReconnect 回调（超时：设备可能未重开）');
         ctx.assert(called, 'onAutoReconnect 回调未触发');
+        // 接管恢复（与 DEV-SM-011 一致）
+        const recovered = await takeoverRecover(ctx, p!, 60000);
+        ctx.log(
+          `接管恢复结束 isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+        );
+        ctx.assert(
+          recovered,
+          `多次 answer(true) 接管后应恢复 Ready 且起流恢复，实际 isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+        );
       } finally {
         p!.onAutoReconnect = undefined;
         p!.autoReconnect = false;
+        try {
+          await p!.stopDataNotification();
+        } catch {
+          // ignore
+        }
         await p!.disconnect();
       }
-      return 'answer idempotent';
+      return 'answer idempotent + 接管恢复成功';
     },
   },
   {

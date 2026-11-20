@@ -118,12 +118,45 @@ export const miscCases: TestCase[] = [
     priority: 'P1',
     mode: 'auto',
     run: async (ctx) => {
-      ctx.assert(DataType.NTF_EEG === 0x10, 'NTF_EEG');
-      ctx.assert(DataType.NTF_IMU === 0x13, 'NTF_IMU');
-      ctx.assert(DataType.NTF_PPG === 0x18, 'NTF_PPG');
-      ctx.assert(DataType.NTF_ANGLE === 0xd, 'NTF_ANGLE');
-      ctx.assert(DataType.NTF_IMPEDANCE === 0x12, 'NTF_IMPEDANCE');
-      return 'enum values ok';
+      // C API 约定的 DataType 数值（与 libsensor.so / sen_capi.h 一致）
+      const expected: Array<[string, number]> = [
+        ['NTF_ACC', 0x1],
+        ['NTF_GYRO', 0x2],
+        ['NTF_MAG', 0x3],
+        ['NTF_EULER', 0x4],
+        ['NTF_QUAT', 0x5],
+        ['NTF_ROTA', 0x6],
+        ['NTF_EMG_GEST', 0x7],
+        ['NTF_EMG_ADC', 0x8],
+        ['NTF_HID_MOUSE', 0x9],
+        ['NTF_HID_JOYSTICK', 0xa],
+        ['NTF_DEV_STATUS', 0xb],
+        ['NTF_LOG', 0xc],
+        ['NTF_ANGLE', 0xd],
+        ['NTF_MOT_CURRENT', 0xe],
+        ['NTF_NEUCIR_STATUS', 0xf],
+        ['NTF_EEG', 0x10],
+        ['NTF_ECG', 0x11],
+        ['NTF_IMPEDANCE', 0x12],
+        ['NTF_IMU', 0x13],
+        ['NTF_ADS', 0x14],
+        ['NTF_BRTH', 0x15],
+        ['NTF_IMPEDANCE_EXT', 0x16],
+        ['NTF_SPO2_HR', 0x17],
+        ['NTF_PPG', 0x18],
+      ];
+      const enumTable = DataType as unknown as Record<string, number>;
+      const lines: string[] = [];
+      for (const [name, exp] of expected) {
+        const got = enumTable[name];
+        ctx.assert(
+          got === exp,
+          `${name} 应为 0x${exp.toString(16).toUpperCase()}，实际 ${got}`,
+        );
+        lines.push(`${name}=0x${got.toString(16).toUpperCase()}`);
+      }
+      ctx.log('DataType 枚举映射: ' + lines.join(' '));
+      return `checked ${expected.length} enum values`;
     },
   },
   {

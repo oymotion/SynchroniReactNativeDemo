@@ -26,19 +26,48 @@ export const multiCases: TestCase[] = [
         await disconnectAll(sensors);
         ctx.skip(`需要 ≥2 台已登记设备，当前 ${sensors.length}`);
       }
-      const results = await SensorController.Instance.multiStartDataNotification(
-        sensors,
-        15000,
-        100,
-        3,
-      );
-      ctx.assert(results.length === sensors.length, '结果长度应等于输入数');
-      for (const r of results) {
-        ctx.assert(r.ok === true, `设备 ${r.mac} 同步起流失败: ${r.error}`);
+      // 挂数据回调，验证「真的起流并收到数据」，而非只靠 multiStart 返回 ok。
+      const counts = sensors.map(() => 0);
+      sensors.forEach((s, i) => {
+        s.onSensorNotifyData = (_p, list) => {
+          counts[i] += list ? list.length : 0;
+        };
+      });
+      try {
+        const results = await SensorController.Instance.multiStartDataNotification(
+          sensors,
+          15000,
+          100,
+          3,
+        );
+        ctx.assert(results.length === sensors.length, '结果长度应等于输入数');
+        for (const r of results) {
+          ctx.assert(r.ok === true, `设备 ${r.mac} 同步起流失败: ${r.error}`);
+        }
+        await ctx.waitFor(
+          () => sensors.every((s) => s.isDataTransfering) && counts.every((n) => n > 0),
+          TestConfig.DATA_TIMEOUT_MS,
+          '两设备同步起流并收到数据',
+        );
+        ctx.log(
+          `[MULTI-FUNC-001] 起流状态=[${sensors.map((s) => s.isDataTransfering).join(',')}] batches=[${counts.join(',')}]`,
+        );
+        ctx.assert(
+          sensors.every((s) => s.isDataTransfering),
+          `同步起流后应 isDataTransfering=true，实际 [${sensors.map((s) => s.isDataTransfering).join(',')}]`,
+        );
+        ctx.assert(
+          counts.every((n) => n > 0),
+          `同步起流后应收到数据，实际批次 [${counts.join(',')}]`,
+        );
+      } finally {
+        sensors.forEach((s) => {
+          s.onSensorNotifyData = () => {};
+        });
+        await SensorController.Instance.multiStopDataNotification(sensors, 15000);
+        await disconnectAll(sensors);
       }
-      await SensorController.Instance.multiStopDataNotification(sensors, 15000);
-      await disconnectAll(sensors);
-      return `synced ${results.length} devices`;
+      return `synced ${sensors.length} devices, batches=[${counts.join(',')}]`;
     },
   },
   {
@@ -53,14 +82,43 @@ export const multiCases: TestCase[] = [
         await disconnectAll(sensors);
         ctx.skip(`需要 ≥2 台已登记设备，当前 ${sensors.length}`);
       }
-      await SensorController.Instance.multiStartDataNotification(sensors, 15000, 100, 3);
-      const results = await SensorController.Instance.multiStopDataNotification(sensors, 15000);
-      ctx.assert(results.length === sensors.length, '结果长度应等于输入数');
-      for (const r of results) {
-        ctx.assert(r.ok === true, `设备 ${r.mac} 停流失败: ${r.error}`);
+      // 挂数据回调，先确保起流且有数据传输，再同步停流。
+      const counts = sensors.map(() => 0);
+      sensors.forEach((s, i) => {
+        s.onSensorNotifyData = (_p, list) => {
+          counts[i] += list ? list.length : 0;
+        };
+      });
+      try {
+        await SensorController.Instance.multiStartDataNotification(sensors, 15000, 100, 3);
+        await ctx.waitFor(
+          () => sensors.every((s) => s.isDataTransfering) && counts.every((n) => n > 0),
+          TestConfig.DATA_TIMEOUT_MS,
+          '两设备同步起流并收到数据',
+        );
+        ctx.log(
+          `[MULTI-FUNC-002] 停流前 起流状态=[${sensors.map((s) => s.isDataTransfering).join(',')}] batches=[${counts.join(',')}]`,
+        );
+        ctx.assert(
+          sensors.every((s) => s.isDataTransfering),
+          `停流前应 isDataTransfering=true，实际 [${sensors.map((s) => s.isDataTransfering).join(',')}]`,
+        );
+        ctx.assert(
+          counts.every((n) => n > 0),
+          `停流前应收到数据，实际批次 [${counts.join(',')}]`,
+        );
+        const results = await SensorController.Instance.multiStopDataNotification(sensors, 15000);
+        ctx.assert(results.length === sensors.length, '结果长度应等于输入数');
+        for (const r of results) {
+          ctx.assert(r.ok === true, `设备 ${r.mac} 停流失败: ${r.error}`);
+        }
+      } finally {
+        sensors.forEach((s) => {
+          s.onSensorNotifyData = () => {};
+        });
+        await disconnectAll(sensors);
       }
-      await disconnectAll(sensors);
-      return `stopped ${results.length} devices`;
+      return `stopped ${sensors.length} devices, batches=[${counts.join(',')}]`;
     },
   },
   {
@@ -104,12 +162,24 @@ export const multiCases: TestCase[] = [
         ctx.assert(nullCount === 0, `回放有 ${nullCount} 个失败（null 成员）`);
         // multi replay 起播后有约 12s 的启动延迟（多 bin 对齐 / 共享时钟建立）才投递数据，
         // 需比单播更长的时间等待（实测 t≈12s 才有首包，比 DATA_TIMEOUT_MS 的 10s 更久）。
+        // 先确保起流（回放起播）且有数据发送，再停止。
         await ctx.waitFor(() => counts.every((n) => n > 0), 30000, 'multiReplay data');
+        const beforeStop = counts.slice();
+        ctx.log(`[MULTI-FUNC-003] 停止前 batches=[${beforeStop.join(',')}]`);
+        const stopResults: string[] = [];
         for (const mac of macs) {
-          await c.stopBinReplay(mac);
+          stopResults.push(await c.stopBinReplay(mac));
         }
-        ctx.log(`[MULTI-FUNC-003] multiReplay batches=[${counts.join(',')}]`);
+        ctx.log(`[MULTI-FUNC-003] stopBinReplay 返回=[${stopResults.join(',')}]`);
+        // 停止后观察一小段，确认数据不再增长（回放已真正停止）
+        await ctx.sleep(3000);
+        const afterStop = counts.slice();
+        ctx.log(`[MULTI-FUNC-003] 停止后 batches=[${afterStop.join(',')}]`);
         ctx.assert(counts.every((n) => n > 0), `multiReplayBinFile 回放应推送数据，实际批次 [${counts.join(',')}]`);
+        ctx.assert(
+          afterStop.every((n, i) => n === beforeStop[i]),
+          `停止回放后数据应停止增长，停止前 [${beforeStop.join(',')}]，停止后 [${afterStop.join(',')}]`,
+        );
         return `replayed ${replayed.length} bins, batches=[${counts.join(',')}]`;
       } finally {
         profiles.forEach((p) => {

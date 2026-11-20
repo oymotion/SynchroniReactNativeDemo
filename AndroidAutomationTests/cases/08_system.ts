@@ -1,7 +1,8 @@
-import { SensorController } from '@synchroni/synchroni_sdk_react_native';
+import { DeviceStateEx, SensorController } from '@synchroni/synchroni_sdk_react_native';
 import type { SensorProfile } from '@synchroni/synchroni_sdk_react_native';
 import { TestConfig } from '../TestConfig';
 import type { TestCase, TestContext } from '../types';
+import { takeoverRecover } from './02_connection';
 
 const noop = () => {};
 
@@ -38,13 +39,38 @@ export const systemCases: TestCase[] = [
     chapter: '08_系统异常',
     priority: 'P0',
     mode: 'semi-auto',
-    steps: ['先建立连接并起流，随后关闭系统蓝牙。'],
+    steps: [
+      '点击「验证」后脚本会自动连接并起流。',
+      '看到起流成功后，手动关闭系统蓝牙（Android 快速设置 / iOS 控制中心）。',
+    ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
-      await ctx.sleep(1500);
-      ctx.assert(!p!.isDataTransfering, '关闭蓝牙后数据流应停止');
-      return 'data stopped';
+      // 1. 连接 + 起流（此时蓝牙仍开启）
+      await ctx.prepare(p!);
+      const transferEvents: boolean[] = [];
+      p!.onDataTransferStateChange = (_s, t) => transferEvents.push(t);
+      const started = await p!.startDataNotification();
+      ctx.assert(started, 'startDataNotification() returned false');
+      await ctx.waitFor(() => p!.isDataTransfering, TestConfig.DATA_TIMEOUT_MS, '起流后有数据在传');
+      try {
+        // 2. 等待人工关闭蓝牙，数据流应停止（最长 3 分钟）
+        await ctx.waitFor(() => !p!.isDataTransfering, 180000, '关闭蓝牙后数据流停止');
+      } finally {
+        p!.onDataTransferStateChange = undefined;
+        try {
+          await p!.disconnect();
+        } catch {
+          // ignore
+        }
+      }
+      // 3. 断言链路丢失：数据停止、设备断开、收到 transfer=false 事件
+      ctx.assert(!p!.isReady, '关闭蓝牙后设备应断开（isReady=false）');
+      ctx.assert(
+        transferEvents.includes(false),
+        `应收到 onDataTransferStateChange=false（链路丢失），实际 [${transferEvents.join(',')}]`,
+      );
+      return `stopped; transferEvents=[${transferEvents.join(',')}]`;
     },
   },
   {
@@ -53,13 +79,67 @@ export const systemCases: TestCase[] = [
     chapter: '08_系统异常',
     priority: 'P0',
     mode: 'semi-auto',
-    steps: ['先起流，关闭蓝牙，再重新打开蓝牙。'],
+    steps: [
+      '点击「验证」后脚本会自动连接并起流。',
+      '第 1 步：关闭系统蓝牙，等待检测到断链。',
+      '第 2 步：重新打开系统蓝牙，等待 onAutoReconnect 回调后由测试接管恢复起流。',
+    ],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
+      if (!p!.isReady) {
+        await ctx.prepare(p!);
+      }
+      ctx.assert(p!.isReady, '设备应已连接 Ready');
+      // 断链前先起流建立「上次会话」，否则 onAutoReconnect 不会触发。
+      const started = await p!.startDataNotification();
+      ctx.assert(started, '断链前应成功起流（否则无「上次会话」，自动重连不会触发）');
       p!.autoReconnect = true;
-      await ctx.waitFor(() => p!.isReady, 60000, '蓝牙重开后自动重连 Ready');
-      return 'recovered';
+      // 接管模式（镜像 demo/DEV-SM-011）：回调里 answer(true)，由测试脚本重跑会话恢复。
+      let answered = false;
+      p!.onAutoReconnect = (_s, _hasLast, answer) => {
+        answer(true);
+        answered = true;
+      };
+      ctx.log('第 1 步：请关闭系统蓝牙，等待 deviceState 变 Disconnected…');
+      await ctx.waitFor(
+        () => p!.deviceState === DeviceStateEx.Disconnected,
+        60000,
+        '断链（deviceState 变 Disconnected，超时：蓝牙可能未关闭）',
+      );
+      ctx.log(`已断链 deviceState=${DeviceStateEx[p!.deviceState]} isAutoReconnecting=${p!.isAutoReconnecting}`);
+      await ctx.sleep(2000);
+      ctx.assert(
+        !p!.isReady,
+        `断链后 2s 内不应自动回 Ready，实际 deviceState=${DeviceStateEx[p!.deviceState]}`,
+      );
+      ctx.log('第 2 步：请重新打开系统蓝牙，等待 onAutoReconnect 回调…');
+      let cbOk = false;
+      try {
+        await ctx.waitFor(() => answered, 60000, 'onAutoReconnect 回调');
+        cbOk = true;
+      } catch (e) {
+        cbOk = false;
+      }
+      ctx.assert(cbOk, 'onAutoReconnect 回调未触发（若 isReady=true 说明已重连但未回调）');
+      const recovered = await takeoverRecover(ctx, p!, 60000);
+      ctx.log(
+        `接管恢复结束 deviceState=${DeviceStateEx[p!.deviceState]} isReady=${p!.isReady} ` +
+          `isDataTransfering=${p!.isDataTransfering}`,
+      );
+      ctx.assert(
+        recovered,
+        `接管后应在超时内恢复 Ready 且起流恢复，实际 isReady=${p!.isReady} isDataTransfering=${p!.isDataTransfering}`,
+      );
+      p!.onAutoReconnect = undefined;
+      p!.autoReconnect = false;
+      try {
+        await p!.stopDataNotification();
+      } catch {
+        // ignore
+      }
+      await p!.disconnect();
+      return 'recovered via takeover';
     },
   },
   {

@@ -68,12 +68,28 @@ export const dataflowCases: TestCase[] = [
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       await ctx.prepare(p!);
-      await p!.startDataNotification();
-      const ok = await p!.stopDataNotification();
-      ctx.assert(ok === true, 'stopDataNotification 应返回 true');
-      ctx.assert(p!.isDataTransfering === false, 'isDataTransfering 应为 false');
-      await p!.disconnect();
-      return 'stopped';
+      let batches = 0;
+      p!.onSensorNotifyData = () => {
+        batches += 1;
+      };
+      try {
+        const started = await p!.startDataNotification();
+        ctx.assert(started === true, 'startDataNotification 应返回 true');
+        await ctx.waitFor(
+          () => p!.isDataTransfering && batches > 0,
+          TestConfig.DATA_TIMEOUT_MS,
+          '起流并收到数据',
+        );
+        ctx.assert(p!.isDataTransfering === true, '起流后 isDataTransfering 应为 true');
+        ctx.assert(batches > 0, '起流后应收到数据');
+        const ok = await p!.stopDataNotification();
+        ctx.assert(ok === true, 'stopDataNotification 应返回 true');
+        ctx.assert(p!.isDataTransfering === false, '停流后 isDataTransfering 应为 false');
+      } finally {
+        p!.onSensorNotifyData = () => {};
+        await p!.disconnect();
+      }
+      return `stopped (batches=${batches})`;
     },
   },
   {
@@ -203,14 +219,33 @@ export const dataflowCases: TestCase[] = [
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       const d = await ctx.captureBatch(p!);
-      if (d.sampleCount >= 2) {
-        const t0 = d.getTimeStampInMs(0, 0);
-        const t1 = d.getTimeStampInMs(0, Math.min(1, d.sampleCount - 1));
-        ctx.assert(t1 >= t0, '时间戳应单调不减');
+      ctx.assert(d.sampleCount > 0, '批次样本数应 > 0');
+
+      // 相对时间戳：随样本索引单调不减（>1000Hz 时 getTimeStampInMs 会截断为同值，故用「不减」而非「严格增」）
+      const n = Math.min(d.sampleCount, 32);
+      const rel: number[] = [];
+      for (let si = 0; si < n; si++) {
+        rel.push(d.getTimeStampInMs(0, si));
       }
-      ctx.assert(typeof d.getAbsTimeStampInSec(0, 0) === 'number', 'abs 时间应为 number');
+      for (let si = 1; si < n; si++) {
+        ctx.assert(
+          rel[si] >= rel[si - 1],
+          `getTimeStampInMs 应单调不减：rel[${si}]=${rel[si]} < rel[${si - 1}]=${rel[si - 1]}`,
+        );
+      }
+
+      // 绝对时间戳：有限数且不随样本倒退（是否为 Unix 秒由打印值人工核对）
+      const absFirst = d.getAbsTimeStampInSec(0, 0);
+      const absLast = d.getAbsTimeStampInSec(0, n - 1);
+      ctx.assert(Number.isFinite(absFirst), `getAbsTimeStampInSec 应为有限数，实际 ${absFirst}`);
+      ctx.assert(absLast >= absFirst, `abs 时间戳不应倒退：abs[0]=${absFirst} abs[${n - 1}]=${absLast}`);
+
       await p!.disconnect();
-      return `ts0=${d.getTimeStampInMs(0, 0)}`;
+      return (
+        `sampleRate=${d.sampleRate} sampleCount=${d.sampleCount} ` +
+        `relMs[0]=${rel[0]} relMs[${n - 1}]=${rel[n - 1]} ` +
+        `absSec[0]=${absFirst.toFixed(6)} absSec[${n - 1}]=${absLast.toFixed(6)}`
+      );
     },
   },
   {
@@ -493,53 +528,61 @@ export const dataflowCases: TestCase[] = [
   },
   {
     id: 'DATA-PERF-003',
-    title: '干扰下 lostPackageCount 可观测',
+    title: '干扰下逐通道丢包可观测（isLost）',
     chapter: '03_数据流',
     priority: 'P2',
     mode: 'semi-auto',
-    steps: ['起流后拉远距离/制造弱信号，观察 lostPackageCount 增长。'],
+    steps: ['起流后拉远距离/制造弱信号，观察各通道 isLost 丢失样本数增长。'],
     run: async (ctx) => {
       const p = await ctx.requireTarget();
       ctx.assert(!!p, '目标设备未找到');
       await ctx.prepare(p!);
-      let count = 0;
-      let last = -1;
-      let max = -1;
-      let monotonic = true;
-      let changes = 0;
-      let dataType = 0;
+      let batches = 0;
+      let totalLost = 0;
+      let maxLostPackageCount = -1;
+      const dataTypes = new Set<number>();
+      const perChannel = new Map<number, number>();
       const transitions: string[] = [];
       p!.onSensorNotifyData = (_s, list) => {
-        if (list.length === 0) {
-          return;
-        }
-        const lost = list[0].lostPackageCount;
-        dataType = list[0].dataType;
-        count++;
-        if (lost > max) {
-          max = lost;
-        }
-        if (lost !== last) {
-          if (last >= 0) {
-            transitions.push(`${last}->${lost}`);
-            if (lost < last) {
-              monotonic = false;
-            }
-            changes++;
+        for (const d of list) {
+          dataTypes.add(d.dataType);
+          batches++;
+          if (d.lostPackageCount > maxLostPackageCount) {
+            maxLostPackageCount = d.lostPackageCount;
           }
-          last = lost;
+          if (!d.isDataValid()) {
+            continue;
+          }
+          let batchLost = 0;
+          for (let ch = 0; ch < d.channelCount; ch++) {
+            for (let i = 0; i < d.sampleCount; i++) {
+              if (d.isLost(ch, i)) {
+                perChannel.set(ch, (perChannel.get(ch) ?? 0) + 1);
+                batchLost++;
+              }
+            }
+          }
+          if (batchLost > 0) {
+            totalLost += batchLost;
+            transitions.push(`+${batchLost}`);
+          }
         }
       };
       await p!.startDataNotification();
       await ctx.sleep(20000);
       await p!.stopDataNotification();
       p!.onSensorNotifyData = () => {};
+      const channelSummary = Array.from(perChannel.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([ch, n]) => `ch${ch}:${n}`)
+        .join(',');
       ctx.log(
-        `lostPackageCount 采样 type=${dataType} 批数=${count} max=${max} last=${last} 单调不减=${monotonic} 变化次数=${changes} 走向=[${transitions.join(',')}]`
+        `isLost 采样 type=[${Array.from(dataTypes).join(',')}] 批数=${batches} totalLost=${totalLost} 通道=[${channelSummary || '无'}] 走向=[${transitions.join(',')}] lostPackageCount_max=${maxLostPackageCount}`
       );
-      ctx.assert(typeof max === 'number' && max >= 0, 'lostPackageCount 应 >=0');
+      ctx.assert(batches > 0, '应收到数据批次');
+      ctx.assert(totalLost >= 0, '累计丢失样本数应 >=0');
       await p!.disconnect();
-      return `type=${dataType} batches=${count} max=${max} last=${last} monotonic=${monotonic} changes=${changes}`;
+      return `type=[${Array.from(dataTypes).join(',')}] batches=${batches} totalLost=${totalLost} channels=[${channelSummary || 'none'}] lostPackageCount_max=${maxLostPackageCount}`;
     },
   },
 ];

@@ -39,6 +39,9 @@ export const TestConfig = {
   /** init 的电量刷新间隔（毫秒）。 */
   INIT_POWER_REFRESH_MS: 60000,
 
+  /** init() 原生调用在 JS 侧的等待上限（毫秒），避免设备未就绪时 init 无限挂起。 */
+  INIT_TIMEOUT_MS: 30000,
+
   /** 电量读取/推送等待上限（毫秒）。 */
   POWER_TIMEOUT_MS: 10000,
 

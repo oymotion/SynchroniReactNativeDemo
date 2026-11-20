@@ -336,18 +336,54 @@ export const controlCases: TestCase[] = [
     run: async (ctx) => {
       const c = SensorController.Instance;
       const events: Array<{ isScanning: boolean; errorMsg: string }> = [];
-      c.onScanStateChange = (isScanning, errorMsg) => events.push({ isScanning, errorMsg });
-      await c.startScan(3000);
-      await ctx.sleep(500);
-      await c.stopScan();
-      await ctx.sleep(500);
-      c.onScanStateChange = undefined;
-      ctx.assert(events.length >= 2, `应收到起/停两次推送，实际 ${events.length}`);
+      c.onScanStateChange = (isScanning, errorMsg) => {
+        ctx.log(`[scan-state] 收到回调 isScanning=${isScanning} errorMsg="${errorMsg}"`);
+        events.push({ isScanning, errorMsg });
+      };
+      ctx.log('[scan-state] 已注册 onScanStateChange 回调');
+
+      try {
+        // 用 Android 合法周期（6000~30000）避免钳制告警噪声；周期对本用例的状态回调无影响。
+        ctx.log('[scan-state] 调用 startScan(6000)…');
+        const started = await c.startScan(6000);
+        ctx.log(`[scan-state] startScan(6000) 返回 ${started}`);
+        if (!started) {
+          ctx.log('[scan-state] 警告：startScan 返回 false（定位权限被拒或原生起扫失败），后续将等不到启动回调');
+        }
+
+        ctx.log('[scan-state] 等待 isScanning=true 启动回调…');
+        await ctx.waitFor(
+          () => events.some((e) => e.isScanning),
+          5000,
+          '收到 isScanning=true 的扫描启动回调',
+        );
+        ctx.log('[scan-state] 已收到 isScanning=true 启动回调');
+
+        ctx.log('[scan-state] 调用 stopScan()…');
+        await c.stopScan();
+        ctx.log('[scan-state] stopScan() 已返回');
+
+        ctx.log('[scan-state] 等待 isScanning=false 停止回调…');
+        await ctx.waitFor(
+          () => events.some((e) => !e.isScanning),
+          5000,
+          '收到 isScanning=false 的扫描停止回调',
+        );
+        ctx.log('[scan-state] 已收到 isScanning=false 停止回调');
+      } finally {
+        c.onScanStateChange = undefined;
+        ctx.log('[scan-state] 已移除 onScanStateChange 回调（清理）');
+      }
+
+      ctx.log(`[scan-state] 共收到 ${events.length} 次回调: ${JSON.stringify(events)}`);
       const startEvt = events.find((e) => e.isScanning);
       const stopEvt = events.find((e) => !e.isScanning);
       ctx.assert(!!startEvt, '应收到 isScanning=true 的扫描启动回调');
       ctx.assert(!!stopEvt, '应收到 isScanning=false 的扫描停止回调');
-      ctx.assert((startEvt?.errorMsg ?? '') === '', `启动回调 errorMsg 应为空，实际 "${startEvt?.errorMsg}"`);
+      ctx.assert(
+        (startEvt?.errorMsg ?? '') === '',
+        `启动回调 errorMsg 应为空，实际 "${startEvt?.errorMsg}"`,
+      );
       return `start/stop 回调正常，共 ${events.length} 次`;
     },
   },

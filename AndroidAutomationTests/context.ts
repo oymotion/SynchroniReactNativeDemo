@@ -126,9 +126,13 @@ export function createContext(log: (msg: string) => void): TestContext {
         await ctx.waitFor(() => profile.isReady, TestConfig.READY_TIMEOUT_MS, 'device Ready');
       }
       if (!profile.hasInited) {
-        const ok = await profile.init(
-          TestConfig.INIT_PACKAGE_SAMPLE_COUNT,
-          TestConfig.INIT_POWER_REFRESH_MS,
+        const ok = await withTimeout(
+          profile.init(
+            TestConfig.INIT_PACKAGE_SAMPLE_COUNT,
+            TestConfig.INIT_POWER_REFRESH_MS,
+          ),
+          TestConfig.INIT_TIMEOUT_MS,
+          'init',
         );
         ctx.assert(ok, 'init() returned false');
       }

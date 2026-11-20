@@ -66,14 +66,25 @@ export const batteryLogCases: TestCase[] = [
       await ctx.prepare(p!);
       const started = await p!.startDataNotification();
       ctx.assert(started, 'startDataNotification() returned false');
-      let received: number | undefined;
+
+      // 基线电量：只有后续推送与基线不同，才算真正观察到「电量变化」被推送捕获。
+      const baseline = await p!.getBatteryLevel();
+      ctx.log(`[BATT-FUNC-002] baseline battery=${baseline}`);
+
+      const powers: number[] = [];
       p!.onPowerChanged = (_s, power) => {
-        received = power;
+        powers.push(power);
       };
+
+      let changed: number | undefined;
       try {
-        // 起流后等最多 15 分钟，收到电量推送即结束。
+        // 起流后等最多 15 分钟，找到第一个与基线不同的电量推送即视为「电量变化」。
         const deadline = Date.now() + 15 * 60 * 1000;
-        while (received === undefined && Date.now() < deadline) {
+        while (Date.now() < deadline) {
+          changed = powers.find((v) => v !== baseline);
+          if (changed !== undefined) {
+            break;
+          }
           await ctx.sleep(1000);
         }
       } finally {
@@ -85,12 +96,15 @@ export const batteryLogCases: TestCase[] = [
         }
         await p!.disconnect();
       }
-      if (received === undefined) {
-        ctx.skip('15 分钟内未收到电量变化');
+
+      if (changed === undefined) {
+        ctx.skip(
+          `15 分钟内未观察到电量变化（基线=${baseline}，收到 ${powers.length} 次推送，值=[${powers.join(',')}]）`,
+        );
         return '';
       }
-      ctx.assert(received >= 0, `电量推送应 >=0，实际 ${received}`);
-      return `power=${received}`;
+      ctx.assert(changed >= 0, `电量推送应 >=0，实际 ${changed}`);
+      return `baseline=${baseline} -> changed=${changed}（共 ${powers.length} 次推送）`;
     },
   },
   {
